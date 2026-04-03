@@ -27,9 +27,9 @@ st.header("📊 数据分析")
 st.info("💡 分析前一日的市场数据，帮助判断市场整体趋势和状态")
 
 db = StockDatabase()
-    fetcher = StockDataFetcher()
+fetcher = StockDataFetcher()
 
-    tab1, tab2, tab3 = st.tabs(["📈 重点指标分析", "⚙️ 指标管理", "📋 历史记录"])
+tab1, tab2, tab3 = st.tabs(["📈 重点指标分析", "⚙️ 指标管理", "📋 历史记录"])
 
     with tab1:
         st.subheader("重点指标分析")
