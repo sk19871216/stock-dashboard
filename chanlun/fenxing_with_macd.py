@@ -118,24 +118,21 @@ def merge_same_type(filtered):
 
 def pad_fenxing(fenxing_list, klines):
     """
-    在分型列表的开头和结尾补充相反的分型
+    在分型列表的开头补充相反的分型（不补充结尾）
 
     Args:
         fenxing_list: 分型列表
-        klines: 原始K线数据（用于获取开头和结尾的K线信息）
+        klines: 原始K线数据（用于获取开头的K线信息）
 
     Returns:
         补全后的分型列表
     """
-    if len(fenxing_list) < 2:
+    if len(fenxing_list) < 1:
         return fenxing_list
 
     padded = fenxing_list.copy()
     first_fenxing = fenxing_list[0]
-    last_fenxing = fenxing_list[-1]
-
     first_kline = klines[0]
-    last_kline = klines[-1]
 
     if first_fenxing[1] == '顶':
         padded.insert(0, (0, '底', {
@@ -150,21 +147,6 @@ def pad_fenxing(fenxing_list, klines):
             'high': first_kline['high'],
             'low': first_kline['low'],
             'pos': 0
-        }))
-
-    if last_fenxing[1] == '顶':
-        padded.append((len(klines) - 1, '底', {
-            'date': last_kline['date'],
-            'high': last_kline['high'],
-            'low': last_kline['low'],
-            'pos': len(klines) - 1
-        }))
-    elif last_fenxing[1] == '底':
-        padded.append((len(klines) - 1, '顶', {
-            'date': last_kline['date'],
-            'high': last_kline['high'],
-            'low': last_kline['low'],
-            'pos': len(klines) - 1
         }))
 
     return padded
