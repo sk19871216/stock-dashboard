@@ -84,6 +84,19 @@ class StockDatabase:
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS triggered_stocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT,
+                source TEXT,
+                trigger_date TEXT,
+                price REAL,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         conn.commit()
         conn.close()
 
@@ -119,6 +132,77 @@ class StockDatabase:
         df = pd.read_sql("SELECT * FROM watchlist ORDER BY created_at DESC", conn)
         conn.close()
         return df
+
+    def add_to_triggered(self, code: str, name: str = None, source: str = None,
+                         trigger_date: str = None, price: float = None, notes: str = "") -> bool:
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO triggered_stocks
+                (code, name, source, trigger_date, price, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (code, name, source, trigger_date, price, notes))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"添加触发指标失败: {e}")
+            return False
+
+    def remove_from_triggered(self, code: str) -> bool:
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM triggered_stocks WHERE code = ?", (code,))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"删除触发指标失败: {e}")
+            return False
+
+    def get_triggered_stocks(self) -> pd.DataFrame:
+        conn = self._get_connection()
+        df = pd.read_sql("SELECT * FROM triggered_stocks ORDER BY created_at DESC", conn)
+        conn.close()
+        return df
+
+    def clear_triggered_stocks(self) -> bool:
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM triggered_stocks")
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"清空触发指标失败: {e}")
+            return False
+
+    def batch_add_to_triggered(self, stocks: List[Dict]) -> int:
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            for stock in stocks:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO triggered_stocks
+                    (code, name, source, trigger_date, price, notes)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    stock.get('code', ''),
+                    stock.get('name', ''),
+                    stock.get('source', ''),
+                    stock.get('trigger_date', date.today().isoformat()),
+                    stock.get('price'),
+                    stock.get('notes', '')
+                ))
+            conn.commit()
+            conn.close()
+            return len(stocks)
+        except Exception as e:
+            print(f"批量添加触发指标失败: {e}")
+            return 0
 
     def save_kline_data(self, code: str, data: pd.DataFrame):
         try:

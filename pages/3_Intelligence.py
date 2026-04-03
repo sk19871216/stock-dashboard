@@ -95,16 +95,14 @@ with tab1:
     with tab2:
         st.subheader("触发指标股（从缠论选股导入）")
 
-        if 'triggered_stocks' not in st.session_state:
-            st.session_state['triggered_stocks'] = []
-
-        triggered_stocks = st.session_state['triggered_stocks']
+        triggered_df = db.get_triggered_stocks()
 
         if st.button("🗑️ 清空列表"):
-            st.session_state['triggered_stocks'] = []
+            db.clear_triggered_stocks()
+            st.success("已清空列表")
             st.rerun()
 
-        if not triggered_stocks:
+        if triggered_df.empty:
             st.info("暂无触发指标股，请从「缠论选股」页面导入")
             st.markdown("""
             ### 导入方法
@@ -113,11 +111,11 @@ with tab1:
             3. 在「扫描结果」中点击「📥 导入到触发指标」
             """)
         else:
-            st.markdown(f"### 触发指标股列表 (共 {len(triggered_stocks)} 只)")
+            st.markdown(f"### 触发指标股列表 (共 {len(triggered_df)} 只)")
 
-            triggered_df = pd.DataFrame(triggered_stocks)
-
-            st.dataframe(triggered_df, use_container_width=True)
+            display_df = triggered_df[['code', 'name', 'source', 'trigger_date', 'price']].copy()
+            display_df.columns = ['代码', '名称', '来源', '触发日期', '价格']
+            st.dataframe(display_df, use_container_width=True)
 
             st.markdown("---")
             st.markdown("### 操作")
@@ -126,21 +124,20 @@ with tab1:
 
             codes_to_remove = st.multiselect(
                 "选择要删除的股票",
-                options=[s['股票代码'] for s in triggered_stocks],
+                options=triggered_df['code'].tolist(),
                 default=[]
             )
 
             if st.button("🗑️ 删除选中", type="primary") and codes_to_remove:
-                st.session_state['triggered_stocks'] = [
-                    s for s in triggered_stocks if s['股票代码'] not in codes_to_remove
-                ]
+                for code in codes_to_remove:
+                    db.remove_from_triggered(code)
                 st.success(f"已删除 {len(codes_to_remove)} 只股票")
                 st.rerun()
 
             if st.button("➕ 添加到自选股", type="secondary"):
                 added_count = 0
-                for stock in triggered_stocks:
-                    if db.add_to_watchlist(stock['股票代码'], stock.get('名称', ''), 'A股'):
+                for _, row in triggered_df.iterrows():
+                    if db.add_to_watchlist(row['code'], row.get('name', ''), 'A股'):
                         added_count += 1
                 st.success(f"已将 {added_count} 只股票添加到自选股")
 

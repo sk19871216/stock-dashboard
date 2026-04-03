@@ -124,11 +124,16 @@ with tab2:
             )
         with col2:
             if st.button("📤 导入到触发指标（一买）", key="import_first"):
-                all_results = st.session_state['first_buys_df'].to_dict('records')
-                for record in all_results:
-                    record['名称'] = record.get('股票代码', '')
-                st.session_state['triggered_stocks'] = all_results
-                st.success(f"已将 {len(all_results)} 只一买股票导入到触发指标")
+                db.clear_triggered_stocks()
+                for _, row in st.session_state['first_buys_df'].iterrows():
+                    db.add_to_triggered(
+                        code=row['股票代码'],
+                        name=row.get('买点日期', ''),
+                        source='一买',
+                        trigger_date=row.get('买点日期'),
+                        price=row.get('买点价格')
+                    )
+                st.success(f"已将 {len(st.session_state['first_buys_df'])} 只一买股票导入到触发指标")
 
     if 'second_buys_df' in st.session_state and not st.session_state['second_buys_df'].empty:
         has_results = True
@@ -148,11 +153,16 @@ with tab2:
             )
         with col2:
             if st.button("📤 导入到触发指标（二买）", key="import_second"):
-                all_results = st.session_state['second_buys_df'].to_dict('records')
-                for record in all_results:
-                    record['名称'] = record.get('股票代码', '')
-                st.session_state['triggered_stocks'] = all_results
-                st.success(f"已将 {len(all_results)} 只二买股票导入到触发指标")
+                db.clear_triggered_stocks()
+                for _, row in st.session_state['second_buys_df'].iterrows():
+                    db.add_to_triggered(
+                        code=row['股票代码'],
+                        name=row.get('买点日期', ''),
+                        source='二买',
+                        trigger_date=row.get('买点日期'),
+                        price=row.get('买点价格')
+                    )
+                st.success(f"已将 {len(st.session_state['second_buys_df'])} 只二买股票导入到触发指标")
 
     if 'first_buys_df' in st.session_state and 'second_buys_df' in st.session_state:
         first_df = st.session_state.get('first_buys_df', pd.DataFrame())
@@ -168,11 +178,17 @@ with tab2:
             st.dataframe(all_signals_df, use_container_width=True)
 
             if st.button("📤 导入全部到触发指标", key="import_all"):
-                all_results = all_signals_df.to_dict('records')
-                for record in all_results:
-                    record['名称'] = record.get('股票代码', '')
-                st.session_state['triggered_stocks'] = all_results
-                st.success(f"已将 {len(all_results)} 只股票导入到触发指标")
+                db.clear_triggered_stocks()
+                for _, row in all_signals_df.iterrows():
+                    source = '一买' if '一买' in str(row.get('买点类型', '')) else '二买'
+                    db.add_to_triggered(
+                        code=row['股票代码'],
+                        name='',
+                        source=source,
+                        trigger_date=row.get('买点日期'),
+                        price=row.get('买点价格')
+                    )
+                st.success(f"已将 {len(all_signals_df)} 只股票导入到触发指标")
 
             csv_all = all_signals_df.to_csv(index=False)
             st.download_button(
