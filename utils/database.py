@@ -31,22 +31,6 @@ class StockDatabase:
         """)
 
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS stock_kline (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL,
-                date TEXT NOT NULL,
-                open REAL,
-                high REAL,
-                low REAL,
-                close REAL,
-                volume REAL,
-                amount REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(code, date)
-            )
-        """)
-
-        cursor.execute("""
             CREATE TABLE IF NOT EXISTS predictions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT NOT NULL,
@@ -93,6 +77,29 @@ class StockDatabase:
                 trigger_date TEXT,
                 price REAL,
                 notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stock_list (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT,
+                market TEXT DEFAULT 'A股',
+                list_date TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS update_failed_stocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT,
+                fail_date TEXT,
+                error_msg TEXT,
+                retry_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -204,21 +211,148 @@ class StockDatabase:
             print(f"批量添加触发指标失败: {e}")
             return 0
 
-    def save_kline_data(self, code: str, data: pd.DataFrame):
+    def save_stock_list(self, stocks: pd.DataFrame) -> int:
+        """保存股票列表到数据库"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
 
             rows = [
-                (code, row['date'], row['open'], row['high'], row['low'],
-                 row['close'], row['volume'], row['amount'])
-                for _, row in data.iterrows()
+                (row['code'], row['name'], 'A股', date.today().isoformat())
+                for _, row in stocks.iterrows()
             ]
 
             cursor.executemany("""
-                INSERT OR REPLACE INTO stock_kline
-                (code, date, open, high, low, close, volume, amount)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO stock_list (code, name, market, list_date)
+                VALUES (?, ?, ?, ?)
+            """, rows)
+
+            conn.commit()
+            count = cursor.rowcount
+            conn.close()
+            return len(rows)
+        except Exception as e:
+            print(f"保存股票列表失败: {e}")
+            return 0
+
+    def get_stock_list(self) -> pd.DataFrame:
+        """获取股票列表"""
+        conn = self._get_connection()
+        df = pd.read_sql("SELECT * FROM stock_list ORDER BY code", conn)
+        conn.close()
+        return df
+
+    def get_stock_list_count(self) -> int:
+        """获取股票列表数量"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM stock_list")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    def save_failed_stock(self, code: str, name: str = None, error_msg: str = "") -> bool:
+        """保存更新失败的股票"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO update_failed_stocks
+                (code, name, fail_date, error_msg, retry_count)
+                VALUES (?, ?, ?, ?, COALESCE((SELECT retry_count FROM update_failed_stocks WHERE code = ?), 0) + 1)
+            """, (code, name, date.today().isoformat(), error_msg, code))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"保存失败股票失败: {e}")
+            return False
+
+    def remove_failed_stock(self, code: str) -> bool:
+        """移除失败记录（更新成功后调用）"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM update_failed_stocks WHERE code = ?", (code,))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"移除失败记录失败: {e}")
+            return False
+
+    def get_failed_stocks(self) -> pd.DataFrame:
+        """获取更新失败的股票列表"""
+        conn = self._get_connection()
+        df = pd.read_sql("SELECT * FROM update_failed_stocks ORDER BY retry_count DESC, created_at DESC", conn)
+        conn.close()
+        return df
+
+    def get_failed_stocks_count(self) -> int:
+        """获取失败股票数量"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM update_failed_stocks")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    def clear_failed_stocks(self) -> bool:
+        """清空失败记录"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM update_failed_stocks")
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"清空失败记录失败: {e}")
+            return False
+
+    def save_kline_data(self, code: str, data: pd.DataFrame):
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            rows = []
+            for _, row in data.iterrows():
+                volume = row['volume'] if pd.notna(row['volume']) else 0
+                if volume < 1:
+                    continue
+
+                date = row['date']
+                open_price = row['open']
+                close = row['close']
+                high = row['high']
+                low = row['low']
+                amount = row['amount']
+
+                prev_close = row.get('prev_close', None)
+                if pd.isna(prev_close) or prev_close == 0:
+                    pct_chg = 0.0
+                    chg = 0.0
+                else:
+                    pct_chg = (close - prev_close) / prev_close * 100
+                    chg = close - prev_close
+
+                if low != 0:
+                    amplitude = (high - low) / low * 100
+                else:
+                    amplitude = 0.0
+
+                turnover = amount / volume / close * 100 if (volume > 0 and close > 0) else 0.0
+
+                rows.append((
+                    date, code, open_price, close, high, low, volume, amount,
+                    amplitude, pct_chg, chg, turnover, 1
+                ))
+
+            cursor.executemany("""
+                INSERT OR REPLACE INTO daily
+                (date, code, open, close, high, low, volume, amount,
+                 amplitude, pct_chg, chg, turnover, valid_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, rows)
 
             conn.commit()
@@ -230,43 +364,21 @@ class StockDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daily'")
-        has_daily_table = cursor.fetchone() is not None
-
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_kline'")
-        has_stock_kline_table = cursor.fetchone() is not None
-
-        df = pd.DataFrame()
-
-        if has_daily_table:
-            query = """
-                SELECT date, open, close, high, low, volume, amount
-                FROM daily
-                WHERE code = ?
-                ORDER BY date DESC
-                LIMIT ?
-            """
-            df = pd.read_sql(query, conn, params=(code, days))
-
-        if df.empty and has_stock_kline_table:
-            query = """
-                SELECT date, open, high, low, close, volume, amount
-                FROM stock_kline
-                WHERE code = ?
-                ORDER BY date DESC
-                LIMIT ?
-            """
-            df = pd.read_sql(query, conn, params=(code, days))
+        query = """
+            SELECT date, open, close, high, low, volume, amount,
+                   amplitude, pct_chg, chg, turnover, valid_data
+            FROM daily
+            WHERE code = ?
+            ORDER BY date DESC
+            LIMIT ?
+        """
+        df = pd.read_sql(query, conn, params=(code, days))
 
         conn.close()
 
         if not df.empty:
-            df = df.sort_values('date')
-            if 'open' not in df.columns or 'close' not in df.columns:
-                if 'open' in df.columns and 'close' not in df.columns:
-                    df['close'] = df['open']
-                elif 'close' in df.columns and 'open' not in df.columns:
-                    df['open'] = df['close']
+            df = df.sort_values('date').reset_index(drop=True)
+            df['prev_close'] = df['close'].shift(1).fillna(df['close'])
 
         return df
 

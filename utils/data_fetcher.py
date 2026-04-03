@@ -9,33 +9,46 @@ warnings.filterwarnings('ignore')
 class StockDataFetcher:
     def __init__(self):
         self.data_source = "mootdx"
+        self._has_mootdx = False
+        self.client = None
         self._init_data_source()
 
     def _init_data_source(self):
         try:
-            from mootdx import Daily, Config
-            self.daily = Daily()
-            self.lff = None
+            from mootdx.quotes import Quotes
+            self.client = Quotes.factory(market='std', server=('120.76.1.198', 7709))
             self._has_mootdx = True
-        except ImportError:
+            print("mootdx 通达信连接成功")
+        except Exception as e:
             self._has_mootdx = False
-            print("mootdx 未安装，将使用 akshare 作为备选")
+            print(f"mootdx 连接失败: {e}，将使用 akshare 作为备选")
+
+    def _reconnect(self, max_retries=3):
+        """重新连接通达信"""
+        import time
+        for i in range(max_retries):
+            try:
+                from mootdx.quotes import Quotes
+                self.client = Quotes.factory(market='std', server=('120.76.1.198', 7709))
+                self._has_mootdx = True
+                return True
+            except Exception as e:
+                time.sleep(0.5)
+                continue
+        self._has_mootdx = False
+        return False
 
     def get_daily_kline(self, code: str, days: int = 365) -> Optional[pd.DataFrame]:
         try:
             if self._has_mootdx:
-                market = self._get_market(code)
-                df = self.daily.daily(
-                    code=code,
-                    market=market,
-                    start_date=(datetime.now() - timedelta(days=days)).strftime('%Y%m%d'),
-                    end_date=datetime.now().strftime('%Y%m%d')
-                )
+                df = self.client.bars(symbol=code)
                 if df is not None and not df.empty:
+                    df = df[['open', 'close', 'high', 'low', 'vol', 'amount']].copy()
+                    df.columns = ['open', 'close', 'high', 'low', 'volume', 'amount']
                     df = df.reset_index()
-                    df.columns = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount']
-                    df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-                    return df
+                    df['date'] = pd.to_datetime(df['datetime']).dt.strftime('%Y-%m-%d')
+                    df = df[['date', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+                    return df.tail(days)
         except Exception as e:
             print(f"获取K线数据失败 (mootdx): {e}")
 
@@ -45,22 +58,75 @@ class StockDataFetcher:
         """根据日期范围获取K线数据"""
         try:
             if self._has_mootdx:
-                market = self._get_market(code)
-                df = self.daily.daily(
-                    code=code,
-                    market=market,
-                    start_date=start_date.strftime('%Y%m%d'),
-                    end_date=end_date.strftime('%Y%m%d')
-                )
+                start_str = start_date.strftime('%Y%m%d')
+                end_str = end_date.strftime('%Y%m%d')
+
+                df = self.client.bars(symbol=code)
                 if df is not None and not df.empty:
+                    df = df[['open', 'close', 'high', 'low', 'vol', 'amount']].copy()
+                    df.columns = ['open', 'close', 'high', 'low', 'volume', 'amount']
                     df = df.reset_index()
-                    df.columns = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount']
-                    df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+                    df['date'] = pd.to_datetime(df['datetime']).dt.strftime('%Y-%m-%d')
+                    df = df[['date', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+                    start_fmt = start_date.strftime('%Y-%m-%d')
+                    end_fmt = end_date.strftime('%Y-%m-%d')
+                    df = df[(df['date'] >= start_fmt) & (df['date'] <= end_fmt)]
                     return df
         except Exception as e:
             print(f"获取K线数据失败 (mootdx): {e}")
 
         return self._get_daily_kline_akshare_by_date(code, start_date, end_date)
+
+    def get_realtime_daily(self, code: str) -> Optional[pd.DataFrame]:
+        """只获取最新一天的日K数据（用于批量更新）"""
+        try:
+            if self._has_mootdx:
+                df = self.client.bars(symbol=code, offset=1)
+                if df is not None and not df.empty:
+                    df = df[['open', 'close', 'high', 'low', 'vol', 'amount']].copy()
+                    df.columns = ['open', 'close', 'high', 'low', 'volume', 'amount']
+                    df = df.reset_index()
+                    df['date'] = pd.to_datetime(df['datetime']).dt.strftime('%Y-%m-%d')
+                    df = df[['date', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+                    return df
+        except Exception as e:
+            print(f"获取实时数据失败 (mootdx): {e}")
+        return None
+
+    def get_recent_kline(self, code: str, days: int = 5) -> Optional[pd.DataFrame]:
+        """获取最近N天的K线数据（用于日常更新）"""
+        import time
+        try:
+            if self._has_mootdx:
+                df = self.client.bars(symbol=code, offset=days)
+                if df is not None and not df.empty:
+                    df = df[['open', 'close', 'high', 'low', 'vol', 'amount']].copy()
+                    df.columns = ['open', 'close', 'high', 'low', 'volume', 'amount']
+                    df = df.reset_index()
+                    df['date'] = pd.to_datetime(df['datetime']).dt.strftime('%Y-%m-%d')
+                    df = df[['date', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+                    return df
+        except Exception as e:
+            pass
+
+        if not self._has_mootdx:
+            self._reconnect()
+
+        try:
+            if self._has_mootdx:
+                time.sleep(0.1)
+                df = self.client.bars(symbol=code, offset=days)
+                if df is not None and not df.empty:
+                    df = df[['open', 'close', 'high', 'low', 'vol', 'amount']].copy()
+                    df.columns = ['open', 'close', 'high', 'low', 'volume', 'amount']
+                    df = df.reset_index()
+                    df['date'] = pd.to_datetime(df['datetime']).dt.strftime('%Y-%m-%d')
+                    df = df[['date', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+                    return df
+        except Exception as e:
+            pass
+
+        return None
 
     def _get_daily_kline_akshare_by_date(self, code: str, start_date, end_date) -> Optional[pd.DataFrame]:
         """根据日期范围使用akshare获取K线数据"""
@@ -177,18 +243,18 @@ class StockDataFetcher:
 
         try:
             import akshare as ak
+            df = ak.stock_zt_pool_em(date=date)
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            print(f"获取涨停数据失败: {e}")
+
+        try:
             df = ak.stock_zt_pool_strong_em(date=date)
             if df is not None and not df.empty:
                 return df
         except Exception as e:
-            print(f"获取涨跌停数据失败: {e}")
-
-        try:
-            df = ak.stock_zt_pool_previous_em(date=date)
-            if df is not None and not df.empty:
-                return df
-        except Exception as e:
-            print(f"获取涨跌停数据失败 (备选): {e}")
+            print(f"获取涨停数据失败 (备选): {e}")
 
         return None
 
@@ -206,15 +272,33 @@ class StockDataFetcher:
 
         return None
 
-    def get_sector_flow(self) -> Optional[pd.DataFrame]:
+    def get_sector_flow(self, indicator: str = "今日") -> Optional[pd.DataFrame]:
+        try:
+            import akshare as ak
+            df = ak.stock_sector_fund_flow_rank(indicator=indicator, sector_type='行业资金流')
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            print(f"获取行业资金流向失败: {e}")
+
         try:
             import akshare as ak
             df = ak.stock_sector_spot()
             if df is not None and not df.empty:
                 return df
         except Exception as e:
-            print(f"获取板块资金流向失败: {e}")
+            print(f"获取板块资金流向失败 (备选): {e}")
 
+        return None
+
+    def get_sector_flow_hist(self, symbol: str) -> Optional[pd.DataFrame]:
+        try:
+            import akshare as ak
+            df = ak.stock_sector_fund_flow_hist(symbol=symbol)
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            print(f"获取板块历史资金流向失败: {e}")
         return None
 
     def get_dragon_tiger_data(self, date: str = None) -> Optional[pd.DataFrame]:
@@ -242,6 +326,32 @@ class StockDataFetcher:
             print(f"获取股票信息失败: {e}")
 
         return None
+
+    def get_all_a_stocks(self) -> pd.DataFrame:
+        """获取所有A股股票列表"""
+        try:
+            import akshare as ak
+            df = ak.stock_info_a_code_name()
+            if df is not None and not df.empty:
+                df = df.rename(columns={
+                    '证券代码': 'code',
+                    '证券名称': 'name'
+                })
+                return df
+        except Exception as e:
+            print(f"获取全市场股票列表失败: {e}")
+        return pd.DataFrame()
+
+    def get_all_stock_codes_full(self) -> List[str]:
+        """获取全市场股票代码列表"""
+        try:
+            import akshare as ak
+            df = ak.stock_info_a_code_name()
+            if df is not None and not df.empty:
+                return df['证券代码'].tolist()
+        except Exception as e:
+            print(f"获取全市场股票代码失败: {e}")
+        return []
 
 
 class TechnicalIndicators:
