@@ -15,9 +15,9 @@ st.header("🤖 股票预测")
 st.warning("⚠️ **免责声明**: 预测结果仅供参考，不构成投资建议。股市有风险，投资需谨慎！")
 
 db = StockDatabase()
-    fetcher = StockDataFetcher()
+fetcher = StockDataFetcher()
 
-    tab1, tab2 = st.tabs(["📊 单股预测", "📋 批量预测"])
+tab1, tab2 = st.tabs(["📊 单股预测", "📋 批量预测"])
 
     with tab1:
         st.subheader("单只股票预测")

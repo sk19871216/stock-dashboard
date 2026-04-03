@@ -30,9 +30,9 @@ st.header("🎯 缠论选股")
 st.warning("⚠️ **免责声明**: 选股结果仅供参考，不构成投资建议。")
 
 db = StockDatabase()
-    analyzer = ChanlunAnalyzer()
+analyzer = ChanlunAnalyzer()
 
-    tab1, tab2 = st.tabs(["📊 全市场扫描", "📈 扫描结果"])
+tab1, tab2 = st.tabs(["📊 全市场扫描", "📈 扫描结果"])
 
     with tab1:
         st.subheader("全市场缠论扫描")

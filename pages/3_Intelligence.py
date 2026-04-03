@@ -13,15 +13,15 @@ from utils.data_fetcher import StockDataFetcher, TechnicalIndicators
 st.header("🔍 情报追踪")
 
 db = StockDatabase()
-    fetcher = StockDataFetcher()
+fetcher = StockDataFetcher()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "⭐ 自选股",
-        "📈 触发指标",
-        "📉 大盘分析",
-        "💹 涨跌停",
-        "📰 舆情"
-    ])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "⭐ 自选股",
+    "📈 触发指标",
+    "📉 大盘分析",
+    "💹 涨跌停",
+    "📰 舆情"
+])
 
     with tab1:
         st.subheader("自选股管理")

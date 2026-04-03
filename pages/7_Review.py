@@ -15,14 +15,14 @@ st.header("📝 复盘分析")
 st.info("📖 复盘可以帮助您分析预测与实际的差距，总结经验教训，提高预测准确率")
 
 db = StockDatabase()
-    fetcher = StockDataFetcher()
+fetcher = StockDataFetcher()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 预测对比",
-        "📈 准确率统计",
-        "📝 记录复盘",
-        "📋 历史复盘"
-    ])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 预测对比",
+    "📈 准确率统计",
+    "📝 记录复盘",
+    "📋 历史复盘"
+])
 
     with tab1:
         st.subheader("预测与实际对比")
