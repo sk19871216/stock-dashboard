@@ -3,11 +3,21 @@ import pandas as pd
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
+from functools import wraps
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.database import StockDatabase
+from utils.styles import highlight_yangxian
 from chanlun.analyzer import ChanlunAnalyzer
+
+
+@st.cache_data(ttl=300)
+def get_watchlist_cached():
+    """缓存自选股数据，5分钟过期"""
+    db = StockDatabase()
+    return db.get_watchlist()
+
 
 st.header("📊 缠论分析")
 
@@ -15,6 +25,7 @@ st.warning("⚠️ **免责声明**: 缠论分析仅供参考，不构成投资�
 
 db = StockDatabase()
 analyzer = ChanlunAnalyzer()
+watchlist = get_watchlist_cached()
 
 tab1, tab2, tab3 = st.tabs(["🔍 单股分析", "📈 MACD分析", "📋 历史买点"])
 
@@ -25,7 +36,6 @@ with tab1:
     with col1:
         analyze_code = st.text_input("股票代码", placeholder="例如: 000006", key="analyze_code")
 
-    watchlist = db.get_watchlist()
     if not watchlist.empty:
         watchlist_codes = watchlist['code'].tolist()
         selected = st.selectbox("或从自选股选择", [""] + watchlist_codes, key="analyze_select")
@@ -113,13 +123,6 @@ with tab1:
                         summary_df = analyzer.get_buy_signals_summary(result)
                         if not summary_df.empty:
                             st.markdown("#### 买点信号汇总")
-
-                            def highlight_yangxian(val):
-                                if isinstance(val, str) and '%' in val:
-                                    pct = float(val.replace('%', ''))
-                                    if pct > 3:
-                                        return 'color: red; font-weight: bold'
-                                return ''
 
                             styled_df = summary_df.style.map(
                                 highlight_yangxian,
@@ -230,13 +233,6 @@ with tab3:
 
                     if not summary_df.empty:
                         st.success(f"找到 {len(summary_df)} 个买点信号")
-
-                        def highlight_yangxian(val):
-                            if isinstance(val, str) and '%' in val:
-                                pct = float(val.replace('%', ''))
-                                if pct > 3:
-                                    return 'color: red; font-weight: bold'
-                            return ''
 
                         styled_df = summary_df.style.map(
                             highlight_yangxian,

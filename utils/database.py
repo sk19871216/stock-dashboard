@@ -123,14 +123,20 @@ class StockDatabase:
     def save_kline_data(self, code: str, data: pd.DataFrame):
         try:
             conn = self._get_connection()
-            for _, row in data.iterrows():
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT OR REPLACE INTO stock_kline
-                    (code, date, open, high, low, close, volume, amount)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (code, row['date'], row['open'], row['high'], row['low'],
-                      row['close'], row['volume'], row['amount']))
+            cursor = conn.cursor()
+
+            rows = [
+                (code, row['date'], row['open'], row['high'], row['low'],
+                 row['close'], row['volume'], row['amount'])
+                for _, row in data.iterrows()
+            ]
+
+            cursor.executemany("""
+                INSERT OR REPLACE INTO stock_kline
+                (code, date, open, high, low, close, volume, amount)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, rows)
+
             conn.commit()
             conn.close()
         except Exception as e:

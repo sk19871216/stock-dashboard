@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
 
+ZHONGSHU_THRESHOLD = 1.0
+PRICE_DIFF_THRESHOLD = 2.0
+
+
 @dataclass
 class SignalPoint:
     date: str
@@ -87,7 +91,7 @@ def detect_divergence(curr: Dict, prev: Optional[Dict], direction: str = 'bottom
 
     if direction == 'bottom':
         pl = abs(curr['price_low'] - prev['price_low']) / prev['price_low'] * 100
-        in_z = pl < 1
+        in_z = pl < ZHONGSHU_THRESHOLD
 
         cg = curr['green_area'] < 0
         pg = prev['green_area'] < 0
@@ -101,7 +105,7 @@ def detect_divergence(curr: Dict, prev: Optional[Dict], direction: str = 'bottom
             cond_a = abs(curr['green_area']) < abs(prev['green_area'])
             cond_b = abs(curr['green_bar_height']) < abs(prev['green_bar_height'])
 
-        if prev['force'] > 0:
+        if prev['force'] > 0 and curr['force'] < 0:
             cond_c = abs(curr['force']) < abs(prev['force'])
 
         if not (cond_a or cond_b or cond_c):
@@ -125,6 +129,7 @@ def detect_divergence(curr: Dict, prev: Optional[Dict], direction: str = 'bottom
         }
     else:
         ph = abs(curr['price_high'] - prev['price_high']) / prev['price_high'] * 100
+        in_z = ph < PRICE_DIFF_THRESHOLD
         cr = curr['red_area'] > 0
         pr = prev['red_area'] > 0
 
@@ -137,7 +142,7 @@ def detect_divergence(curr: Dict, prev: Optional[Dict], direction: str = 'bottom
             cond_a = curr['red_area'] < prev['red_area']
             cond_b = curr['red_bar_height'] < prev['red_bar_height']
 
-        if prev['force'] > 0:
+        if prev['force'] > 0 and curr['force'] > 0:
             cond_c = abs(curr['force']) < abs(prev['force'])
 
         if not (cond_a or cond_b or cond_c):
@@ -145,7 +150,7 @@ def detect_divergence(curr: Dict, prev: Optional[Dict], direction: str = 'bottom
 
         return {
             'has_divergence': True,
-            'in_zhongshu': ph < 2,
+            'in_zhongshu': in_z,
             'price_diff_pct': ph,
             'cond_a': cond_a,
             'cond_b': cond_b,
@@ -214,12 +219,12 @@ def identify_first_buy(trends: List[Dict], df, klines) -> List[SignalPoint]:
             prev_low = downs[compare_idx]['end_fenxing'][2]['low']
             low_diff_pct = abs(curr_low - prev_low) / prev_low * 100
 
-            if low_diff_pct > 1:
+            if low_diff_pct > ZHONGSHU_THRESHOLD:
                 check_idx = compare_idx - 1
                 while check_idx >= 0:
                     check_low = downs[check_idx]['end_fenxing'][2]['low']
                     check_diff = abs(prev_low - check_low) / check_low * 100
-                    if check_diff < 1:
+                    if check_diff < ZHONGSHU_THRESHOLD:
                         compare_idx = check_idx
                         prev_low = check_low
                         check_idx -= 1
