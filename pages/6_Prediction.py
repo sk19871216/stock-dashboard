@@ -19,192 +19,256 @@ fetcher = StockDataFetcher()
 
 tab1, tab2 = st.tabs(["📊 单股预测", "📋 批量预测"])
 
-    with tab1:
-        st.subheader("单只股票预测")
+with tab1:
+    st.subheader("单只股票预测")
 
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            predict_code = st.text_input("股票代码", placeholder="例如: 600000", key="predict_code")
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        predict_code = st.text_input("股票代码", placeholder="例如: 600000", key="predict_code")
 
-        watchlist = db.get_watchlist()
-        if not watchlist.empty:
-            watchlist_codes = watchlist['code'].tolist()
-            selected = st.selectbox("或从自选股选择", [""] + watchlist_codes, key="predict_select")
-            if selected:
-                predict_code = selected
+    watchlist = db.get_watchlist()
+    if not watchlist.empty:
+        watchlist_codes = watchlist['code'].tolist()
+        selected = st.selectbox("或从自选股选择", [""] + watchlist_codes, key="predict_select")
+        if selected:
+            predict_code = selected
 
-        if st.button("🔮 开始预测", type="primary"):
-            if predict_code:
-                kline_data = db.get_kline_data(predict_code, days=120)
+    if st.button("🔮 开始预测", type="primary"):
+        if predict_code:
+            kline_data = db.get_kline_data(predict_code, days=120)
 
-                if kline_data.empty:
-                    st.error("暂无数据，请先更新数据")
-                else:
+            if kline_data.empty:
+                st.error("暂无数据，请先更新数据")
+            else:
+                df = TechnicalIndicators.get_all_indicators(kline_data)
+                latest = df.iloc[-1]
+                prev = df.iloc[-2]
+
+                st.markdown("---")
+                st.markdown(f"### {predict_code} 技术分析")
+
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("当前价格", f"{latest['close']:.2f}",
+                            f"{((latest['close']-prev['close'])/prev['close']*100):+.2f}%" if prev['close'] != 0 else "")
+
+                with col2:
+                    st.metric("MA5", f"{latest['ma5']:.2f}")
+                with col3:
+                    st.metric("MA20", f"{latest['ma20']:.2f}")
+                with col4:
+                    st.metric("MA60", f"{latest['ma60']:.2f}")
+
+                st.markdown("#### MACD指标")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("DIF", f"{latest['macd']:.3f}")
+                with col2:
+                    st.metric("DEA", f"{latest['macd_signal']:.3f}")
+                with col3:
+                    macd_color = "🔴" if latest['macd_hist'] > 0 else "🟢"
+                    st.metric("MACD柱", f"{latest['macd_hist']:.3f}", macd_color)
+
+                st.markdown("#### KDJ指标")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("K值", f"{latest['kdj_k']:.2f}")
+                with col2:
+                    st.metric("D值", f"{latest['kdj_d']:.2f}")
+                with col3:
+                    st.metric("J值", f"{latest['kdj_j']:.2f}")
+
+                st.markdown("#### RSI指标")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("RSI6", f"{latest['rsi6']:.2f}")
+                with col2:
+                    st.metric("RSI12", f"{latest['rsi12']:.2f}")
+                with col3:
+                    st.metric("RSI24", f"{latest['rsi24']:.2f}")
+
+                st.markdown("---")
+                st.markdown("### 📈 明日预测")
+
+                predicted_price = predict_next_price(df)
+                predicted_direction = "上涨" if predicted_price > latest['close'] else ("下跌" if predicted_price < latest['close'] else "持平")
+
+                change = predicted_price - latest['close']
+                change_pct = (change / latest['close'] * 100) if latest['close'] != 0 else 0
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("预测价格", f"{predicted_price:.2f}", f"{change:+.2f} ({change_pct:+.2f}%)")
+                with col2:
+                    st.metric("预测方向", predicted_direction)
+                with col3:
+                    confidence = calculate_confidence(df)
+                    st.metric("置信度", f"{confidence}%")
+
+                st.markdown("#### 预测理由")
+                reasons = generate_prediction_reasons(df, latest)
+                for reason in reasons:
+                    st.markdown(f"- {reason}")
+
+                st.markdown("---")
+
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("💾 保存预测"):
+                        db.save_prediction(
+                            predict_code,
+                            datetime.now().strftime('%Y-%m-%d'),
+                            predicted_price,
+                            predicted_direction,
+                            "; ".join(reasons)
+                        )
+                        st.success("预测已保存")
+
+                with col2:
+                    if st.button("📊 查看历史预测"):
+                        predictions = db.get_predictions(predict_code, days=30)
+                        if not predictions.empty:
+                            st.dataframe(predictions)
+                        else:
+                            st.info("暂无历史预测")
+        else:
+            st.warning("请输入股票代码或选择自选股")
+
+with tab2:
+    st.subheader("批量预测")
+
+    watchlist = db.get_watchlist()
+
+    if watchlist.empty:
+        st.warning("自选股列表为空，请先添加股票")
+    else:
+        st.info(f"将对以下 {len(watchlist)} 只股票进行预测")
+
+        selected_codes = st.multiselect(
+            "选择股票",
+            options=watchlist['code'].tolist(),
+            default=watchlist['code'].tolist()[:10] if len(watchlist) > 10 else watchlist['code'].tolist()
+        )
+
+        if st.button("🔮 批量预测", type="primary"):
+            with st.spinner("正在预测..."):
+                results = []
+
+                for code in selected_codes:
+                    kline_data = db.get_kline_data(code, days=120)
+                    if kline_data.empty:
+                        continue
+
                     df = TechnicalIndicators.get_all_indicators(kline_data)
                     latest = df.iloc[-1]
-                    prev = df.iloc[-2]
-
-                    st.markdown("---")
-                    st.markdown(f"### {predict_code} 技术分析")
-
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("当前价格", f"{latest['close']:.2f}",
-                                f"{((latest['close']-prev['close'])/prev['close']*100):+.2f}%" if prev['close'] != 0 else "")
-
-                    with col2:
-                        st.metric("MA5", f"{latest['ma5']:.2f}")
-                    with col3:
-                        st.metric("MA20", f"{latest['ma20']:.2f}")
-                    with col4:
-                        st.metric("MA60", f"{latest['ma60']:.2f}")
-
-                    st.markdown("#### MACD指标")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("DIF", f"{latest['macd']:.3f}")
-                    with col2:
-                        st.metric("DEA", f"{latest['macd_signal']:.3f}")
-                    with col3:
-                        macd_color = "🔴" if latest['macd_hist'] > 0 else "🟢"
-                        st.metric("MACD柱", f"{latest['macd_hist']:.3f}", macd_color)
-
-                    st.markdown("#### KDJ指标")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("K值", f"{latest['kdj_k']:.2f}")
-                    with col2:
-                        st.metric("D值", f"{latest['kdj_d']:.2f}")
-                    with col3:
-                        st.metric("J值", f"{latest['kdj_j']:.2f}")
-
-                    st.markdown("#### RSI指标")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("RSI6", f"{latest['rsi6']:.2f}")
-                    with col2:
-                        st.metric("RSI12", f"{latest['rsi12']:.2f}")
-                    with col3:
-                        st.metric("RSI24", f"{latest['rsi24']:.2f}")
-
-                    st.markdown("---")
-                    st.markdown("### 📈 明日预测")
-
                     predicted_price = predict_next_price(df)
                     predicted_direction = "上涨" if predicted_price > latest['close'] else ("下跌" if predicted_price < latest['close'] else "持平")
+                    confidence = calculate_confidence(df)
 
-                    change = predicted_price - latest['close']
-                    change_pct = (change / latest['close'] * 100) if latest['close'] != 0 else 0
+                    results.append({
+                        '代码': code,
+                        '名称': watchlist[watchlist['code']==code]['name'].values[0] if 'name' in watchlist.columns else code,
+                        '当前价格': f"{latest['close']:.2f}",
+                        '预测价格': f"{predicted_price:.2f}",
+                        '预测方向': predicted_direction,
+                        '置信度': f"{confidence}%"
+                    })
 
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("预测价格", f"{predicted_price:.2f}", f"{change:+.2f} ({change_pct:+.2f}%)")
-                    with col2:
-                        st.metric("预测方向", predicted_direction)
-                    with col3:
-                        confidence = calculate_confidence(df)
-                        st.metric("置信度", f"{confidence}%")
+                if results:
+                    result_df = pd.DataFrame(results)
+                    st.success(f"完成 {len(results)} 只股票的预测")
+                    st.dataframe(result_df, use_container_width=True)
 
-                    st.markdown("#### 预测理由")
-                    reasons = generate_prediction_reasons(df, latest)
-                    for reason in reasons:
-                        st.markdown(f"- {reason}")
+                    csv = result_df.to_csv(index=False)
+                    st.download_button(
+                        "📥 下载预测结果",
+                        csv,
+                        f"predictions_{datetime.now().strftime('%Y%m%d')}.csv",
+                        "text/csv"
+                    )
+                else:
+                    st.warning("没有可预测的股票数据")
 
-                    st.markdown("---")
+st.markdown("---")
+st.markdown("""
+### 📖 预测方法说明
 
-                    col1, col2 = st.columns([1, 1])
-                    with col1:
-                        if st.button("💾 保存预测"):
-                            db.save_prediction(
-                                predict_code,
-                                datetime.now().strftime('%Y-%m-%d'),
-                                predicted_price,
-                                predicted_direction,
-                                "; ".join(reasons)
-                            )
-                            st.success("预测已保存")
+本系统使用以下技术指标进行预测：
 
-                    with col2:
-                        if st.button("📊 查看历史预测"):
-                            predictions = db.get_predictions(predict_code, days=30)
-                            if not predictions.empty:
-                                st.dataframe(predictions)
-                            else:
-                                st.info("暂无历史预测")
+1. **移动平均线 (MA)**: 5日、20日、60日均线
+2. **MACD**: 指数平滑异同移动平均线
+3. **KDJ**: 随机指标
+4. **布林带 (BOLL)**: 通道指标
+5. **RSI**: 相对强弱指标
 
-            else:
-                st.warning("请输入股票代码或选择自选股")
+预测逻辑基于：
+- 当前价格与均线的位置关系
+- MACD的金叉/死叉信号
+- KDJ的超买/超卖区域
+- 近期趋势的延续性
+""")
 
-    with tab2:
-        st.subheader("批量预测")
 
-        watchlist = db.get_watchlist()
+def predict_next_price(df):
+    """简单预测明日价格"""
+    latest = df.iloc[-1]
+    ma5 = latest['ma5']
+    ma20 = latest['ma20']
+    macd = latest['macd']
+    macd_signal = latest['macd_signal']
 
-        if watchlist.empty:
-            st.warning("自选股列表为空，请先添加股票")
-        else:
-            st.info(f"将对以下 {len(watchlist)} 只股票进行预测")
+    if latest['close'] > ma5 and ma5 > ma20 and macd > macd_signal:
+        return latest['close'] * 1.02
+    elif latest['close'] < ma5 and ma5 < ma20 and macd < macd_signal:
+        return latest['close'] * 0.98
+    else:
+        return latest['close']
 
-            selected_codes = st.multiselect(
-                "选择股票",
-                options=watchlist['code'].tolist(),
-                default=watchlist['code'].tolist()[:10] if len(watchlist) > 10 else watchlist['code'].tolist()
-            )
 
-            if st.button("🔮 批量预测", type="primary"):
-                with st.spinner("正在预测..."):
-                    results = []
+def calculate_confidence(df):
+    """计算预测置信度"""
+    if len(df) < 20:
+        return 50
 
-                    for code in selected_codes:
-                        kline_data = db.get_kline_data(code, days=120)
-                        if kline_data.empty:
-                            continue
+    latest = df.iloc[-1]
+    score = 50
 
-                        df = TechnicalIndicators.get_all_indicators(kline_data)
-                        latest = df.iloc[-1]
-                        predicted_price = predict_next_price(df)
-                        predicted_direction = "上涨" if predicted_price > latest['close'] else ("下跌" if predicted_price < latest['close'] else "持平")
-                        confidence = calculate_confidence(df)
+    if latest['close'] > latest['ma5']:
+        score += 10
+    if latest['ma5'] > latest['ma20']:
+        score += 10
+    if latest['macd'] > latest['macd_signal']:
+        score += 10
+    if latest['macd_hist'] > 0:
+        score += 10
+    if 20 < latest['kdj_j'] < 80:
+        score += 10
 
-                        results.append({
-                            '代码': code,
-                            '名称': watchlist[watchlist['code']==code]['name'].values[0] if 'name' in watchlist.columns else code,
-                            '当前价格': f"{latest['close']:.2f}",
-                            '预测价格': f"{predicted_price:.2f}",
-                            '预测方向': predicted_direction,
-                            '置信度': f"{confidence}%"
-                        })
+    return min(score, 95)
 
-                    if results:
-                        result_df = pd.DataFrame(results)
-                        st.success(f"完成 {len(results)} 只股票的预测")
-                        st.dataframe(result_df, use_container_width=True)
 
-                        csv = result_df.to_csv(index=False)
-                        st.download_button(
-                            "📥 下载预测结果",
-                            csv,
-                            f"predictions_{datetime.now().strftime('%Y%m%d')}.csv",
-                            "text/csv"
-                        )
-                    else:
-                        st.warning("没有可预测的股票数据")
+def generate_prediction_reasons(df, latest):
+    """生成预测理由"""
+    reasons = []
 
-    st.markdown("---")
-    st.markdown("""
-    ### 📖 预测方法说明
+    if latest['close'] > latest['ma5']:
+        reasons.append("价格站上5日均线，短期趋势向好")
+    else:
+        reasons.append("价格跌破5日均线，短期趋势偏弱")
 
-    本系统使用以下技术指标进行预测：
+    if latest['macd'] > latest['macd_signal']:
+        reasons.append("MACD形成金叉，看多信号")
+    else:
+        reasons.append("MACD形成死叉，看空信号")
 
-    1. **移动平均线 (MA)**: 5日、20日、60日均线
-    2. **MACD**: 指数平滑异同移动平均线
-    3. **KDJ**: 随机指标
-    4. **布林带 (BOLL)**: 通道指标
-    5. **RSI**: 相对强弱指标
+    if latest['macd_hist'] > 0:
+        reasons.append("MACD柱为红柱，多头力量占优")
+    else:
+        reasons.append("MACD柱为绿柱，空头力量占优")
 
-    预测逻辑基于：
-    - 当前价格与均线的位置关系
-    - MACD的金叉/死叉信号
-    - KDJ的超买/超卖区域
-    - 近期趋势的延续性
-    """)
+    if latest['kdj_j'] > 80:
+        reasons.append("KDJ J值超买，可能面临回调")
+    elif latest['kdj_j'] < 20:
+        reasons.append("KDJ J值超卖，可能存在反弹机会")
+
+    return reasons

@@ -31,25 +31,25 @@ fetcher = StockDataFetcher()
 
 tab1, tab2, tab3 = st.tabs(["📈 重点指标分析", "⚙️ 指标管理", "📋 历史记录"])
 
-    with tab1:
-        st.subheader("重点指标分析")
+with tab1:
+    st.subheader("重点指标分析")
 
-        if 'custom_indices' not in st.session_state:
-            st.session_state['custom_indices'] = {}
+    if 'custom_indices' not in st.session_state:
+        st.session_state['custom_indices'] = {}
 
-        custom_indices = st.session_state['custom_indices']
+    custom_indices = st.session_state['custom_indices']
 
-        all_indices = {**DEFAULT_INDICES, **custom_indices}
+    all_indices = {**DEFAULT_INDICES, **custom_indices}
 
-        if not all_indices:
-            st.warning("暂无监控指标，请在「指标管理」中添加")
-        else:
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                selected_index = st.selectbox(
-                    "选择要分析的指标",
-                    list(all_indices.keys())
-                )
+    if not all_indices:
+        st.warning("暂无监控指标，请在「指标管理」中添加")
+    else:
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            selected_index = st.selectbox(
+                "选择要分析的指标",
+                list(all_indices.keys())
+            )
 
             with col2:
                 analysis_date = st.date_input(

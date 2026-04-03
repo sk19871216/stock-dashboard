@@ -24,39 +24,39 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📋 历史复盘"
 ])
 
-    with tab1:
-        st.subheader("预测与实际对比")
+with tab1:
+    st.subheader("预测与实际对比")
 
-        predictions = db.get_predictions(days=30)
+    predictions = db.get_predictions(days=30)
 
-        if predictions.empty:
-            st.info("暂无预测记录，请先进行股票预测")
-        else:
-            watchlist = db.get_watchlist()
+    if predictions.empty:
+        st.info("暂无预测记录，请先进行股票预测")
+    else:
+        watchlist = db.get_watchlist()
 
-            st.markdown("### 待验证预测")
-            st.markdown("以下预测需要更新实际结果来验证准确性")
+        st.markdown("### 待验证预测")
+        st.markdown("以下预测需要更新实际结果来验证准确性")
 
-            need_verification = []
+        need_verification = []
 
-            for idx, pred in predictions.iterrows():
-                if pred['actual_price'] is None:
-                    code = pred['code']
-                    kline_data = db.get_kline_data(code, days=10)
+        for idx, pred in predictions.iterrows():
+            if pred['actual_price'] is None:
+                code = pred['code']
+                kline_data = db.get_kline_data(code, days=10)
 
-                    if not kline_data.empty:
-                        latest = kline_data.iloc[-1]
-                        actual_date = latest['date']
+                if not kline_data.empty:
+                    latest = kline_data.iloc[-1]
+                    actual_date = latest['date']
 
-                        if actual_date > pred['predict_date']:
-                            need_verification.append({
-                                '代码': code,
-                                '预测日期': pred['predict_date'],
-                                '预测价格': pred['predicted_price'],
-                                '预测方向': pred['predicted_direction'],
-                                '实际价格': latest['close'],
-                                '实际日期': actual_date
-                            })
+                    if actual_date > pred['predict_date']:
+                        need_verification.append({
+                            '代码': code,
+                            '预测日期': pred['predict_date'],
+                            '预测价格': pred['predicted_price'],
+                            '预测方向': pred['predicted_direction'],
+                            '实际价格': latest['close'],
+                            '实际日期': actual_date
+                        })
 
             if need_verification:
                 ver_df = pd.DataFrame(need_verification)

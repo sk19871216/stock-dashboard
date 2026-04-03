@@ -1,0 +1,1 @@
+在编写代码时，调用fullstack-developer 技能，确保代码符合全栈开发规范。

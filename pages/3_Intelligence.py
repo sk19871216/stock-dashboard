@@ -23,74 +23,74 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📰 舆情"
 ])
 
-    with tab1:
-        st.subheader("自选股管理")
+with tab1:
+    st.subheader("自选股管理")
 
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            new_code = st.text_input("股票代码", placeholder="例如: 600000")
-            new_name = st.text_input("股票名称（可选）", placeholder="例如: 浦发银行")
-            market = st.selectbox("市场", ["A股", "港股", "美股"])
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        new_code = st.text_input("股票代码", placeholder="例如: 600000")
+        new_name = st.text_input("股票名称（可选）", placeholder="例如: 浦发银行")
+        market = st.selectbox("市场", ["A股", "港股", "美股"])
 
-        if st.button("➕ 添加自选股", type="primary"):
-            if new_code:
-                if db.add_to_watchlist(new_code, new_name, market):
-                    st.success(f"✅ {new_code} 已添加到自选股")
-                    st.rerun()
-                else:
-                    st.error("添加失败，可能已存在")
+    if st.button("➕ 添加自选股", type="primary"):
+        if new_code:
+            if db.add_to_watchlist(new_code, new_name, market):
+                st.success(f"✅ {new_code} 已添加到自选股")
+                st.rerun()
             else:
-                st.warning("请输入股票代码")
+                st.error("添加失败，可能已存在")
+        else:
+            st.warning("请输入股票代码")
+
+    st.markdown("---")
+
+    watchlist = db.get_watchlist()
+
+    if watchlist.empty:
+        st.info("自选股列表为空，请添加股票")
+    else:
+        st.markdown(f"### 自选股列表 (共 {len(watchlist)} 只)")
+
+        for idx, row in watchlist.iterrows():
+            col1, col2, col3 = st.columns([2, 2, 1])
+            with col1:
+                code = row['code']
+                name = row['name'] if row['name'] else code
+                st.markdown(f"**{name}** ({code})")
+
+            with col2:
+                kline_data = db.get_kline_data(code, days=5)
+                if not kline_data.empty:
+                    latest = kline_data.iloc[-1]
+                    change = latest['close'] - kline_data.iloc[-2]['close'] if len(kline_data) > 1 else 0
+                    change_pct = (change / kline_data.iloc[-2]['close'] * 100) if len(kline_data) > 1 and kline_data.iloc[-2]['close'] != 0 else 0
+
+                    color = "🔴" if change > 0 else "🟢" if change < 0 else "⚪"
+                    st.markdown(f"{color} 现价: {latest['close']:.2f}  涨跌: {change:+.2f} ({change_pct:+.2f}%)")
+                else:
+                    st.markdown("暂无数据")
+
+            with col3:
+                if st.button("🗑️ 删除", key=f"del_{code}"):
+                    db.remove_from_watchlist(code)
+                    st.rerun()
 
         st.markdown("---")
 
-        watchlist = db.get_watchlist()
+        if st.button("📊 查看所有自选股K线"):
+            st.markdown("### 📈 自选股K线图")
+            selected_codes = st.multiselect(
+                "选择股票查看K线",
+                options=watchlist['code'].tolist(),
+                default=watchlist['code'].tolist()[:3] if len(watchlist) > 3 else watchlist['code'].tolist()
+            )
 
-        if watchlist.empty:
-            st.info("自选股列表为空，请添加股票")
-        else:
-            st.markdown(f"### 自选股列表 (共 {len(watchlist)} 只)")
-
-            for idx, row in watchlist.iterrows():
-                col1, col2, col3 = st.columns([2, 2, 1])
-                with col1:
-                    code = row['code']
-                    name = row['name'] if row['name'] else code
-                    st.markdown(f"**{name}** ({code})")
-
-                with col2:
-                    kline_data = db.get_kline_data(code, days=5)
-                    if not kline_data.empty:
-                        latest = kline_data.iloc[-1]
-                        change = latest['close'] - kline_data.iloc[-2]['close'] if len(kline_data) > 1 else 0
-                        change_pct = (change / kline_data.iloc[-2]['close'] * 100) if len(kline_data) > 1 and kline_data.iloc[-2]['close'] != 0 else 0
-
-                        color = "🔴" if change > 0 else "🟢" if change < 0 else "⚪"
-                        st.markdown(f"{color} 现价: {latest['close']:.2f}  涨跌: {change:+.2f} ({change_pct:+.2f}%)")
-                    else:
-                        st.markdown("暂无数据")
-
-                with col3:
-                    if st.button("🗑️ 删除", key=f"del_{code}"):
-                        db.remove_from_watchlist(code)
-                        st.rerun()
-
-            st.markdown("---")
-
-            if st.button("📊 查看所有自选股K线"):
-                st.markdown("### 📈 自选股K线图")
-                selected_codes = st.multiselect(
-                    "选择股票查看K线",
-                    options=watchlist['code'].tolist(),
-                    default=watchlist['code'].tolist()[:3] if len(watchlist) > 3 else watchlist['code'].tolist()
-                )
-
-                for code in selected_codes:
-                    kline_data = db.get_kline_data(code, days=120)
-                    if not kline_data.empty:
-                        st.markdown(f"#### {code}")
-                        chart_data = kline_data.tail(60)
-                        st.line_chart(chart_data.set_index('date')['close'])
+            for code in selected_codes:
+                kline_data = db.get_kline_data(code, days=120)
+                if not kline_data.empty:
+                    st.markdown(f"#### {code}")
+                    chart_data = kline_data.tail(60)
+                    st.line_chart(chart_data.set_index('date')['close'])
 
     with tab2:
         st.subheader("触发指标股（从缠论选股导入）")
