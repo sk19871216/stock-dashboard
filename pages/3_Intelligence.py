@@ -181,10 +181,13 @@ with tab1:
                     st.metric("KDJ", f"K:{latest['kdj_k']:.1f} D:{latest['kdj_d']:.1f} J:{latest['kdj_j']:.1f}")
 
                 st.markdown("### 近期走势")
-                chart_data = kline_data.tail(30)
-                st.line_chart(chart_data.set_index('date')[['close', 'ma5', 'ma10', 'ma20']].rename(
-                    columns={'ma5': 'MA5', 'ma10': 'MA10', 'ma20': 'MA20'}
-                ))
+                chart_data = df.tail(30)
+                if 'ma5' in chart_data.columns:
+                    st.line_chart(chart_data.set_index('date')[['close', 'ma5', 'ma10', 'ma20']].rename(
+                        columns={'ma5': 'MA5', 'ma10': 'MA10', 'ma20': 'MA20'}
+                    ))
+                else:
+                    st.line_chart(chart_data.set_index('date')[['close']])
 
                 trend = "震荡" if abs(change_pct) < 0.5 else ("上涨" if change_pct > 0 else "下跌")
                 st.info(f"当前趋势: **{trend}**，{'建议关注' if trend == '上涨' else '谨慎操作'}")
