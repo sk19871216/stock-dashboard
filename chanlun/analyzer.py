@@ -47,7 +47,8 @@ class ChanlunAnalyzer:
 
             df_with_macd = add_macd_to_dataframe(df_sorted)
 
-            klines = df_sorted[['date', 'open', 'close', 'high', 'low', 'volume']].to_dict('records')
+            df_valid = df_sorted[df_sorted['volume'] >= 1]
+            klines = df_valid[['date', 'open', 'close', 'high', 'low', 'volume']].to_dict('records')
 
             processed, filtered = find_fenxing(klines)
 

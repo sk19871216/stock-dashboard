@@ -17,8 +17,7 @@ st.header("📊 数据更新")
 db = StockDatabase()
 fetcher = StockDataFetcher()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📈 日K数据（自选股）",
+tab1, tab2, tab3, tab4 = st.tabs([
     "📊 全市场批量更新",
     "💹 涨跌停",
     "📊 板块资金",
@@ -26,72 +25,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("更新自选股日K数据")
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        start_date = st.date_input("开始日期", value=date.today())
-    with col2:
-        end_date = st.date_input("结束日期", value=date.today())
-
-    watchlist = db.get_watchlist()
-
-    if watchlist.empty:
-        st.warning("自选股列表为空，请先在情报追踪页面添加自选股")
-    else:
-        st.info(f"自选股数量: {len(watchlist)}")
-
-        date_range_info = f"日期范围: {start_date} 至 {end_date}"
-        st.info(date_range_info)
-
-        if st.button("🔄 更新所有自选股数据", type="primary"):
-            with st.spinner("正在更新数据..."):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                success_count = 0
-                fail_count = 0
-
-                for idx, row in watchlist.iterrows():
-                    code = row['code']
-                    status_text.text(f"正在更新 {code}...")
-                    try:
-                        df = fetcher.get_daily_kline_by_date(code, start_date, end_date)
-                        if df is not None and not df.empty:
-                            db.save_kline_data(code, df)
-                            success_count += 1
-                        else:
-                            fail_count += 1
-                    except Exception as e:
-                        fail_count += 1
-                        st.error(f"更新 {code} 失败: {str(e)}")
-
-                    progress = (idx + 1) / len(watchlist)
-                    progress_bar.progress(progress)
-
-                status_text.text("更新完成！")
-                st.success(f"更新完成！成功: {success_count}, 失败: {fail_count}")
-
-        st.markdown("---")
-        st.markdown("### 单只股票查询")
-
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            code_input = st.text_input("股票代码", placeholder="例如: 600000")
-        with col2:
-            if st.button("查询单只股票"):
-                if code_input:
-                    with st.spinner("正在获取数据..."):
-                        df = fetcher.get_daily_kline_by_date(code_input, start_date, end_date)
-                        if df is not None and not df.empty:
-                            db.save_kline_data(code_input, df)
-                            st.success(f"✅ {code_input} 数据更新成功！")
-                            st.dataframe(df.tail(10))
-                        else:
-                            st.error("❌ 获取数据失败，请检查股票代码是否正确")
-                else:
-                    st.warning("请输入股票代码")
-
-with tab2:
     st.subheader("全市场股票批量更新")
 
     if 'retry_result' in st.session_state:
@@ -320,7 +253,7 @@ with tab2:
     daily_count = len(db.get_all_stock_codes())
     st.info(f"已下载K线数据的股票: {daily_count} 只")
 
-with tab3:
+with tab2:
     st.subheader("涨跌停数据")
 
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -421,7 +354,7 @@ with tab3:
             else:
                 st.info("未获取到跌停数据")
 
-with tab4:
+with tab3:
     st.subheader("板块资金流向")
 
     sector_col1, sector_col2 = st.columns([1, 1])
@@ -505,7 +438,7 @@ with tab4:
             else:
                 st.error("获取板块数据失败，可能是网络问题或非交易日")
 
-with tab5:
+with tab4:
     st.subheader("龙虎榜数据")
 
     col1, col2 = st.columns([1, 1])

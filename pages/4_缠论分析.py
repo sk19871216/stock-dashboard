@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
-from functools import wraps
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import sqlite3
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -12,11 +13,92 @@ from utils.styles import highlight_yangxian
 from chanlun.analyzer import ChanlunAnalyzer
 
 
+def format_amount(value):
+    """格式化金额为万、亿单位"""
+    if value is None or value == '':
+        return '0'
+    try:
+        val = float(value)
+        if val >= 100000000:
+            return f'{val/100000000:.2f}亿'
+        elif val >= 10000:
+            return f'{val/10000:.2f}万'
+        else:
+            return f'{val:.2f}'
+    except (ValueError, TypeError):
+        return str(value)
+
+
 @st.cache_data(ttl=300)
 def get_watchlist_cached():
-    """缓存自选股数据，5分钟过期"""
     db = StockDatabase()
     return db.get_watchlist()
+
+
+def get_all_stock_codes_cached():
+    try:
+        db_path = Path(__file__).parent.parent / "data" / "stock_data.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT DISTINCT code FROM daily WHERE LENGTH(code) = 6 ORDER BY code')
+        codes = []
+        for row in cursor.fetchall():
+            code = row[0]
+            codes.append(str(code))
+        conn.close()
+        return codes
+    except Exception as e:
+        print(f"Error getting codes: {e}")
+        return []
+
+
+def scan_single_stock(code, days, db, analyzer):
+    try:
+        kline_data = db.get_kline_data(code, days=days)
+        if kline_data.empty or len(kline_data) < 30:
+            return None
+
+        result = analyzer.analyze(kline_data, code)
+        if not result['success']:
+            return None
+
+        latest_price = float(kline_data.iloc[-1]['close'])
+        signals = []
+
+        for fb in result['first_buys']:
+            fb_price = float(fb.get('price', 0))
+            signal = {
+                '序号': '',
+                '股票代码': str(code),
+                '买点类型': '一买',
+                '买点日期': str(fb.get('date', '')),
+                '买点价格': fb_price,
+                '当前价格': latest_price,
+                '区间涨幅%': round(((latest_price - fb_price) / fb_price * 100), 2) if fb_price > 0 else 0,
+                '次阳涨幅%': str(fb.get('次日阳线涨幅%', '0%')),
+                '是否新低': str(fb.get('是否新低', '否'))
+            }
+            signals.append(signal)
+
+        for sb in result['second_buys']:
+            sb_price = float(sb.get('price', 0))
+            signal = {
+                '序号': '',
+                '股票代码': str(code),
+                '买点类型': '二买',
+                '买点日期': str(sb.get('date', '')),
+                '买点价格': sb_price,
+                '当前价格': latest_price,
+                '区间涨幅%': round(((latest_price - sb_price) / sb_price * 100), 2) if sb_price > 0 else 0,
+                '次阳涨幅%': str(sb.get('次日阳线涨幅%', '0%')),
+                '是否新低': '否'
+            }
+            signals.append(signal)
+
+        return signals
+    except Exception as e:
+        print(f"Error scanning {code}: {e}")
+        return None
 
 
 st.header("📊 缠论分析")
@@ -27,7 +109,7 @@ db = StockDatabase()
 analyzer = ChanlunAnalyzer()
 watchlist = get_watchlist_cached()
 
-tab1, tab2, tab3 = st.tabs(["🔍 单股分析", "📈 MACD分析", "📋 历史买点"])
+tab1, tab2 = st.tabs(["🔍 单股分析", "🎯 全市场扫描"])
 
 with tab1:
     st.subheader("单只股票缠论分析")
@@ -151,124 +233,103 @@ with tab1:
             st.warning("请输入股票代码或选择自选股")
 
 with tab2:
-    st.subheader("MACD指标分析")
+    st.subheader("全市场缠论扫描")
+
+    all_codes = get_all_stock_codes_cached()
+    total_stocks = len(all_codes) if all_codes else 0
+    st.metric("股票总数", total_stocks)
+
+    scan_limit = 5191
 
     col1, col2 = st.columns([1, 1])
     with col1:
-        macd_code = st.text_input("股票代码", placeholder="例如: 000006", key="macd_code")
+        st.info(f"扫描股票数量: {scan_limit}")
 
-    if not watchlist.empty:
-        watchlist_codes = watchlist['code'].tolist()
-        selected = st.selectbox("或从自选股选择", [""] + watchlist_codes, key="macd_select")
-        if selected:
-            macd_code = selected
+    with col2:
+        scan_days = st.number_input("分析天数", min_value=60, max_value=365, value=180, key="scan_days_input")
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        macd_days = st.number_input("分析天数", min_value=60, max_value=730, value=120, step=30, key="macd_days")
+    if st.button("🚀 开始扫描", type="primary"):
+        if not all_codes:
+            st.error("无法获取股票列表，请先更新数据")
+        else:
+            scan_codes = all_codes[:scan_limit]
+            st.info(f"即将扫描 {len(scan_codes)} 只股票，使用线程池并发执行...")
 
-    if st.button("📈 分析MACD", type="primary"):
-        if macd_code:
-            kline_data = db.get_kline_data(macd_code, days=macd_days)
+            all_signals = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            completed = 0
 
-            if kline_data.empty:
-                st.error("暂无数据，请先更新数据")
-            else:
-                from chanlun.macd import add_macd_to_dataframe
-                df_with_macd = add_macd_to_dataframe(kline_data)
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_code = {
+                    executor.submit(scan_single_stock, code, scan_days, db, analyzer): code
+                    for code in scan_codes
+                }
 
-                st.success("MACD分析完成")
+                for future in as_completed(future_to_code):
+                    code = future_to_code[future]
+                    try:
+                        signals = future.result()
+                        if signals:
+                            all_signals.extend(signals)
+                    except Exception as e:
+                        pass
 
-                latest = df_with_macd.iloc[-1]
+                    completed += 1
+                    progress = completed / len(scan_codes)
+                    progress_bar.progress(progress)
+                    status_text.text(f"已扫描 {completed}/{len(scan_codes)} 只股票...")
+
+            if all_signals:
+                signals_df = pd.DataFrame(all_signals)
+                signals_df = signals_df.reset_index(drop=True)
+
+                col_order = ['序号', '股票代码', '买点类型', '买点日期', '买点价格', '当前价格', '区间涨幅%', '次阳涨幅%', '是否新低']
+                for col in col_order:
+                    if col not in signals_df.columns:
+                        signals_df[col] = ''
+                signals_df = signals_df[col_order]
+                signals_df['序号'] = range(1, len(signals_df) + 1)
+                signals_df = signals_df.sort_values('买点日期', ascending=False)
+
+                st.success(f"扫描完成！找到 {len(signals_df)} 个买点信号")
 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("DIF", f"{latest['dif']:.3f}")
+                    first_buy_count = len(signals_df[signals_df['买点类型'] == '一买'])
+                    st.metric("一买信号", first_buy_count)
                 with col2:
-                    st.metric("DEA", f"{latest['dea']:.3f}")
+                    second_buy_count = len(signals_df[signals_df['买点类型'] == '二买'])
+                    st.metric("二买信号", second_buy_count)
                 with col3:
-                    macd_color = "🔴" if latest['macd_hist'] > 0 else "🟢"
-                    st.metric("MACD柱", f"{latest['macd_hist']:.3f}", macd_color)
+                    unique_stocks = signals_df['股票代码'].nunique()
+                    st.metric("涉及股票", unique_stocks)
 
-                st.markdown("### 近期MACD柱状图")
-                chart_data = df_with_macd.tail(60)[['date', 'macd_hist']].copy()
-                chart_data = chart_data.set_index('date')
-                st.bar_chart(chart_data)
+                st.markdown("### 一买信号列表")
+                first_df = signals_df[signals_df['买点类型'] == '一买']
+                if not first_df.empty:
+                    st.dataframe(first_df, use_container_width=True)
 
-                st.markdown("### DIF和DEA走势")
-                line_data = df_with_macd.tail(60)[['date', 'dif', 'dea']].copy()
-                line_data = line_data.set_index('date')
-                st.line_chart(line_data)
-        else:
-            st.warning("请输入股票代码")
+                st.markdown("### 二买信号列表")
+                second_df = signals_df[signals_df['买点类型'] == '二买']
+                if not second_df.empty:
+                    st.dataframe(second_df, use_container_width=True)
 
-with tab3:
-    st.subheader("历史买点查询")
+                st.markdown("### 全部买点信号")
+                st.dataframe(signals_df, use_container_width=True)
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        history_code = st.text_input("股票代码", placeholder="例如: 000006", key="history_code")
-
-    if not watchlist.empty:
-        watchlist_codes = watchlist['code'].tolist()
-        selected = st.selectbox("或从自选股选择", [""] + watchlist_codes, key="history_select")
-        if selected:
-            history_code = selected
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        history_days = st.number_input("查询天数", min_value=30, max_value=365, value=90, step=30, key="history_days")
-
-    if st.button("📋 查询历史买点", type="primary"):
-        if history_code:
-            kline_data = db.get_kline_data(history_code, days=history_days)
-
-            if kline_data.empty:
-                st.error("暂无数据")
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    download_df = signals_df.copy()
+                    download_df['股票代码'] = '=' + download_df['股票代码']
+                    download_df['买点价格'] = download_df['买点价格'].apply(format_amount)
+                    download_df['当前价格'] = download_df['当前价格'].apply(format_amount)
+                    csv_data = download_df.to_csv(index=False, encoding='gbk')
+                    st.download_button(
+                        "📥 下载扫描结果",
+                        csv_data,
+                        f"chanlun_scan_{datetime.now().strftime('%Y%m%d')}.csv",
+                        "text/csv"
+                    )
             else:
-                result = analyzer.analyze(kline_data, history_code)
-
-                if result['success']:
-                    summary_df = analyzer.get_buy_signals_summary(result)
-
-                    if not summary_df.empty:
-                        st.success(f"找到 {len(summary_df)} 个买点信号")
-
-                        styled_df = summary_df.style.map(
-                            highlight_yangxian,
-                            subset=['次阳涨幅%']
-                        )
-                        st.dataframe(styled_df, use_container_width=True)
-
-                        csv = summary_df.to_csv(index=False)
-                        st.download_button(
-                            "📥 下载买点数据",
-                            csv,
-                            f"buy_signals_{history_code}_{datetime.now().strftime('%Y%m%d')}.csv",
-                            "text/csv"
-                        )
-                    else:
-                        st.info("在查询范围内未找到买点信号")
-                else:
-                    st.error(f"分析失败: {result.get('error')}")
-        else:
-            st.warning("请输入股票代码")
-
-st.markdown("---")
-st.markdown("""
-### 📖 缠论基础概念
-
-**分型**: K线图中，顶分型是中间K线最高、相邻K线低于中间K线；底分型是中间K线最低、相邻K线高于中间K线。
-
-**趋势**:
-- 下降趋势: 顶分型 → 底分型
-- 上升趋势: 底分型 → 顶分型
-
-**背驰**: 当前趋势段的力度比前一段减弱，表现为MACD指标的变化:
-- 底背驰: 绿柱面积/高度减少，下跌力度减弱
-- 顶背驰: 红柱面积/高度减少，上升力度减弱
-
-**买卖点**:
-- **1买**: 下降趋势结束时的底背驰买点
-- **2买**: 1买后上升回调、不破1买的买点
-""")
+                st.info("未找到任何买点信号")

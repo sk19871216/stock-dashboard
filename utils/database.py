@@ -217,10 +217,20 @@ class StockDatabase:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            rows = [
-                (row['code'], row['name'], 'A股', date.today().isoformat())
-                for _, row in stocks.iterrows()
-            ]
+            rows = []
+            skipped = 0
+            for _, row in stocks.iterrows():
+                code = str(row['code'])
+                if len(code) != 6:
+                    skipped += 1
+                    continue
+                rows.append((code, row['name'], 'A股', date.today().isoformat()))
+
+            if skipped > 0:
+                print(f"跳过 {skipped} 个无效股票代码（长度不为6）")
+
+            if not rows:
+                return 0
 
             cursor.executemany("""
                 INSERT OR REPLACE INTO stock_list (code, name, market, list_date)
@@ -311,6 +321,9 @@ class StockDatabase:
             return False
 
     def save_kline_data(self, code: str, data: pd.DataFrame):
+        if len(code) != 6:
+            print(f"跳过无效股票代码: {code} (长度 {len(code)})")
+            return
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -514,7 +527,7 @@ class StockDatabase:
         has_daily = cursor.fetchone() is not None
 
         if has_daily:
-            cursor.execute("SELECT DISTINCT code FROM daily ORDER BY code")
+            cursor.execute("SELECT DISTINCT code FROM daily WHERE LENGTH(code) = 6 ORDER BY code")
             codes = [row[0] for row in cursor.fetchall()]
 
         if not codes:
@@ -522,7 +535,7 @@ class StockDatabase:
             has_stock_list = cursor.fetchone() is not None
 
             if has_stock_list:
-                cursor.execute("SELECT DISTINCT code FROM stock_list ORDER BY code")
+                cursor.execute("SELECT DISTINCT code FROM stock_list WHERE LENGTH(code) = 6 ORDER BY code")
                 codes = [row[0] for row in cursor.fetchall()]
 
         conn.close()

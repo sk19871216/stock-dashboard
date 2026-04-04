@@ -30,7 +30,7 @@ def get_stock_list():
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     try:
-        cursor.execute('SELECT code FROM stock_list')
+        cursor.execute('SELECT code FROM stock_list WHERE LENGTH(code) = 6')
         stocks = [row[0] for row in cursor.fetchall()]
     except:
         stocks = []
