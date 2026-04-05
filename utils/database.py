@@ -76,6 +76,7 @@ class StockDatabase:
                 source TEXT,
                 trigger_date TEXT,
                 price REAL,
+                next_yang_return TEXT,
                 notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -101,6 +102,25 @@ class StockDatabase:
                 error_msg TEXT,
                 retry_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chanlun_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                name TEXT,
+                signal_type TEXT NOT NULL,
+                signal_date TEXT NOT NULL,
+                signal_price REAL,
+                current_price REAL,
+                interval_return REAL,
+                next_yang_return TEXT,
+                is_new_low TEXT,
+                divergence_details TEXT,
+                scan_date TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(code, signal_type, signal_date)
             )
         """)
 
@@ -194,14 +214,15 @@ class StockDatabase:
             for stock in stocks:
                 cursor.execute("""
                     INSERT OR REPLACE INTO triggered_stocks
-                    (code, name, source, trigger_date, price, notes)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (code, name, source, trigger_date, price, next_yang_return, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     stock.get('code', ''),
                     stock.get('name', ''),
                     stock.get('source', ''),
                     stock.get('trigger_date', date.today().isoformat()),
                     stock.get('price'),
+                    stock.get('next_yang_return', ''),
                     stock.get('notes', '')
                 ))
             conn.commit()
@@ -540,3 +561,114 @@ class StockDatabase:
 
         conn.close()
         return codes
+
+    def save_chanlun_signals(self, signals: List[Dict], scan_date: str = None) -> int:
+        """保存缠论买点信号到数据库"""
+        if not scan_date:
+            scan_date = date.today().isoformat()
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            saved_count = 0
+            for signal in signals:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO chanlun_signals
+                    (code, name, signal_type, signal_date, signal_price, current_price,
+                     interval_return, next_yang_return, is_new_low, divergence_details, scan_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    signal.get('股票代码', ''),
+                    signal.get('name', ''),
+                    signal.get('买点类型', ''),
+                    signal.get('买点日期', ''),
+                    signal.get('买点价格'),
+                    signal.get('当前价格'),
+                    signal.get('区间涨幅%'),
+                    signal.get('次阳涨幅%', ''),
+                    signal.get('是否新低', ''),
+                    signal.get('背驰详情', ''),
+                    scan_date
+                ))
+                saved_count += 1
+
+            conn.commit()
+            conn.close()
+            return saved_count
+        except Exception as e:
+            print(f"保存缠论信号失败: {e}")
+            return 0
+
+    def get_chanlun_signals(self, scan_date: str = None) -> pd.DataFrame:
+        """获取缠论买点信号"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if scan_date:
+            query = """
+                SELECT * FROM chanlun_signals
+                WHERE scan_date = ?
+                ORDER BY signal_date DESC, code
+            """
+            df = pd.read_sql(query, conn, params=(scan_date,))
+        else:
+            query = """
+                SELECT * FROM chanlun_signals
+                ORDER BY scan_date DESC, signal_date DESC, code
+            """
+            df = pd.read_sql(query, conn)
+
+        conn.close()
+        return df
+
+    def get_latest_chanlun_signals(self) -> pd.DataFrame:
+        """获取最新日期的缠论买点信号"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT scan_date FROM chanlun_signals
+            ORDER BY scan_date DESC LIMIT 1
+        """)
+        result = cursor.fetchone()
+
+        if result:
+            latest_date = result[0]
+            df = pd.read_sql("""
+                SELECT * FROM chanlun_signals
+                WHERE scan_date = ?
+                ORDER BY signal_date DESC, code
+            """, conn, params=(latest_date,))
+        else:
+            df = pd.DataFrame()
+
+        conn.close()
+        return df
+
+    def get_chanlun_signals_count(self) -> int:
+        """获取缠论信号数量"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM chanlun_signals")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    def clear_chanlun_signals(self, scan_date: str = None) -> bool:
+        """清空缠论信号"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if scan_date:
+                cursor.execute("DELETE FROM chanlun_signals WHERE scan_date = ?", (scan_date,))
+            else:
+                cursor.execute("DELETE FROM chanlun_signals")
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"清空缠论信号失败: {e}")
+            return False

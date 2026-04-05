@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sqlite3
 
@@ -239,21 +239,33 @@ with tab2:
     total_stocks = len(all_codes) if all_codes else 0
     st.metric("股票总数", total_stocks)
 
+    latest_signals = db.get_latest_chanlun_signals()
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if not latest_signals.empty:
+            latest_date = latest_signals['scan_date'].iloc[0]
+            st.info(f"📊 最新扫描日期: {latest_date}，共 {len(latest_signals)} 条信号")
+        else:
+            st.info("暂无扫描数据，请执行扫描")
+
+    with col2:
+        scan_days = st.number_input("分析天数", min_value=60, max_value=365, value=180, key="scan_days_input")
+
     scan_limit = 5191
 
     col1, col2 = st.columns([1, 1])
     with col1:
         st.info(f"扫描股票数量: {scan_limit}")
 
-    with col2:
-        scan_days = st.number_input("分析天数", min_value=60, max_value=365, value=180, key="scan_days_input")
-
-    if st.button("🚀 开始扫描", type="primary"):
+    if st.button("🚀 重新扫描", type="primary"):
         if not all_codes:
             st.error("无法获取股票列表，请先更新数据")
         else:
+            db.clear_chanlun_signals()
+
             scan_codes = all_codes[:scan_limit]
-            st.info(f"即将扫描 {len(scan_codes)} 只股票，使用线程池并发执行...")
+            st.info(f"正在扫描 {len(scan_codes)} 只股票，使用线程池并发执行...")
 
             all_signals = []
             progress_bar = st.progress(0)
@@ -281,6 +293,24 @@ with tab2:
                     status_text.text(f"已扫描 {completed}/{len(scan_codes)} 只股票...")
 
             if all_signals:
+                scan_date = date.today().isoformat()
+                db.save_chanlun_signals(all_signals, scan_date)
+
+                db.clear_triggered_stocks()
+                triggered_stocks = []
+                for signal in all_signals:
+                    triggered_stocks.append({
+                        'code': signal.get('股票代码', ''),
+                        'name': signal.get('name', ''),
+                        'source': '缠论扫描',
+                        'trigger_date': signal.get('买点日期', ''),
+                        'price': signal.get('买点价格', 0),
+                        'next_yang_return': signal.get('次阳涨幅%', ''),
+                        'notes': f"买点类型: {signal.get('买点类型', '')}"
+                    })
+                if triggered_stocks:
+                    db.batch_add_to_triggered(triggered_stocks)
+
                 signals_df = pd.DataFrame(all_signals)
                 signals_df = signals_df.reset_index(drop=True)
 
@@ -292,7 +322,7 @@ with tab2:
                 signals_df['序号'] = range(1, len(signals_df) + 1)
                 signals_df = signals_df.sort_values('买点日期', ascending=False)
 
-                st.success(f"扫描完成！找到 {len(signals_df)} 个买点信号")
+                st.success(f"扫描完成！找到 {len(signals_df)} 个买点信号，已同步到「情报追踪-触发指标」")
 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -333,3 +363,67 @@ with tab2:
                     )
             else:
                 st.info("未找到任何买点信号")
+                st.rerun()
+
+    if not latest_signals.empty and not st.session_state.get('show_scan_results', False):
+        signals_df = latest_signals.copy()
+        signals_df = signals_df.reset_index(drop=True)
+
+        signals_df = signals_df.rename(columns={
+            'code': '股票代码',
+            'signal_type': '买点类型',
+            'signal_date': '买点日期',
+            'signal_price': '买点价格',
+            'current_price': '当前价格',
+            'interval_return': '区间涨幅%',
+            'next_yang_return': '次阳涨幅%',
+            'is_new_low': '是否新低'
+        })
+
+        if '买点价格' in signals_df.columns:
+            signals_df['买点价格'] = pd.to_numeric(signals_df['买点价格'], errors='coerce').fillna(0)
+        if '当前价格' in signals_df.columns:
+            signals_df['当前价格'] = pd.to_numeric(signals_df['当前价格'], errors='coerce').fillna(0)
+        if '区间涨幅%' in signals_df.columns:
+            signals_df['区间涨幅%'] = pd.to_numeric(signals_df['区间涨幅%'], errors='coerce').fillna(0)
+
+        signals_df['序号'] = range(1, len(signals_df) + 1)
+        signals_df = signals_df.sort_values('买点日期', ascending=False)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            first_buy_count = len(signals_df[signals_df['买点类型'] == '一买'])
+            st.metric("一买信号", first_buy_count)
+        with col2:
+            second_buy_count = len(signals_df[signals_df['买点类型'] == '二买'])
+            st.metric("二买信号", second_buy_count)
+        with col3:
+            unique_stocks = signals_df['股票代码'].nunique()
+            st.metric("涉及股票", unique_stocks)
+
+        st.markdown("### 一买信号列表")
+        first_df = signals_df[signals_df['买点类型'] == '一买']
+        if not first_df.empty:
+            st.dataframe(first_df, use_container_width=True)
+
+        st.markdown("### 二买信号列表")
+        second_df = signals_df[signals_df['买点类型'] == '二买']
+        if not second_df.empty:
+            st.dataframe(second_df, use_container_width=True)
+
+        st.markdown("### 全部买点信号")
+        st.dataframe(signals_df, use_container_width=True)
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            download_df = signals_df.copy()
+            download_df['股票代码'] = '=' + download_df['股票代码']
+            download_df['买点价格'] = download_df['买点价格'].apply(format_amount)
+            download_df['当前价格'] = download_df['当前价格'].apply(format_amount)
+            csv_data = download_df.to_csv(index=False, encoding='gbk')
+            st.download_button(
+                "📥 下载扫描结果",
+                csv_data,
+                f"chanlun_scan_{datetime.now().strftime('%Y%m%d')}.csv",
+                "text/csv"
+            )
