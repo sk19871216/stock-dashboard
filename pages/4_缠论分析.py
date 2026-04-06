@@ -5,12 +5,148 @@ from pathlib import Path
 from datetime import datetime, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sqlite3
+import subprocess
+import json
+import time
+import os
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.database import StockDatabase
 from utils.styles import highlight_yangxian
 from chanlun.analyzer import ChanlunAnalyzer
+
+FEISHU_BASE_TOKEN = "AfodbhAdwaT3aGsT1clcITZRnfr"
+FEISHU_TABLE_ID = "tbldp05jnw0k7lCU"
+
+def clear_feishu_records():
+    """清空飞书表格中的所有记录"""
+    print("开始清空飞书表格...")
+
+    try:
+        cmd = f'lark-cli base +record-list --base-token {FEISHU_BASE_TOKEN} --table-id {FEISHU_TABLE_ID} --limit 500'
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=30,
+            cwd=os.getcwd(),
+            shell=True
+        )
+
+        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
+
+        if result.returncode == 0 and '"ok": true' in stdout:
+            data = json.loads(stdout)
+            record_ids = data.get('data', {}).get('record_id_list', [])
+            print(f"找到 {len(record_ids)} 条记录需要删除")
+
+            for i, record_id in enumerate(record_ids):
+                delete_cmd = f'lark-cli base +record-delete --base-token {FEISHU_BASE_TOKEN} --table-id {FEISHU_TABLE_ID} --record-id {record_id} --yes'
+                delete_result = subprocess.run(
+                    delete_cmd,
+                    capture_output=True,
+                    timeout=10,
+                    cwd=os.getcwd(),
+                    shell=True
+                )
+
+            print("清空完成!")
+            return True
+    except Exception as e:
+        print(f"清空飞书记录失败: {e}")
+
+    return False
+
+def sync_to_feishu(signals_df, progress_callback=None):
+    """同步信号数据到飞书表格"""
+    if signals_df.empty:
+        print("数据为空!")
+        return 0, 0
+
+    success_count = 0
+    fail_count = 0
+    total = len(signals_df)
+
+    print(f"开始同步, 共 {total} 条记录")
+
+    cwd = os.getcwd()
+    temp_json_path = 'temp_record.json'
+
+    for i, (idx, row) in enumerate(signals_df.iterrows()):
+
+        record = {}
+
+        if pd.notna(row.get('股票代码')) and row.get('股票代码'):
+            record['股票代码'] = str(row.get('股票代码', ''))
+
+        if pd.notna(row.get('买点类型')) and row.get('买点类型'):
+            record['买点类型'] = str(row.get('买点类型', ''))
+
+        if pd.notna(row.get('触发日期')) and row.get('触发日期'):
+            record['触发日期'] = str(row.get('触发日期', ''))[:10]
+
+        if pd.notna(row.get('买点价格')) and row.get('买点价格'):
+            try:
+                record['买点价格'] = float(row.get('买点价格', 0))
+            except:
+                pass
+
+        if pd.notna(row.get('当前价格')) and row.get('当前价格'):
+            try:
+                record['当前价格'] = float(row.get('当前价格', 0))
+            except:
+                pass
+
+        if pd.notna(row.get('区间涨幅')) and row.get('区间涨幅'):
+            try:
+                record['区间涨幅'] = float(row.get('区间涨幅', 0))
+            except:
+                pass
+
+        if pd.notna(row.get('次阳收益')) and row.get('次阳收益'):
+            record['次阳收益'] = str(row.get('次阳收益', ''))
+
+        if pd.notna(row.get('是否新低')) and row.get('是否新低'):
+            record['是否新低'] = str(row.get('是否新低', ''))
+
+        if record:
+            try:
+                with open(temp_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(record, f, ensure_ascii=False)
+
+                cmd = f'lark-cli base +record-upsert --base-token {FEISHU_BASE_TOKEN} --table-id {FEISHU_TABLE_ID} --json @{temp_json_path}'
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=15,
+                    cwd=cwd,
+                    shell=True
+                )
+
+                stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
+
+                if result.returncode == 0 and '"ok": true' in stdout:
+                    success_count += 1
+                else:
+                    fail_count += 1
+
+            except Exception as e:
+                fail_count += 1
+
+        if progress_callback:
+            progress_callback(success_count, fail_count, total)
+
+    try:
+        if os.path.exists(temp_json_path):
+            os.remove(temp_json_path)
+    except:
+        pass
+
+    print(f"同步完成: 成功 {success_count}, 失败 {fail_count}")
+
+    return success_count, fail_count
 
 
 def format_amount(value):
@@ -372,11 +508,11 @@ with tab2:
         signals_df = signals_df.rename(columns={
             'code': '股票代码',
             'signal_type': '买点类型',
-            'signal_date': '买点日期',
+            'signal_date': '触发日期',
             'signal_price': '买点价格',
             'current_price': '当前价格',
-            'interval_return': '区间涨幅%',
-            'next_yang_return': '次阳涨幅%',
+            'interval_return': '区间涨幅',
+            'next_yang_return': '次阳收益',
             'is_new_low': '是否新低'
         })
 
@@ -388,7 +524,7 @@ with tab2:
             signals_df['区间涨幅%'] = pd.to_numeric(signals_df['区间涨幅%'], errors='coerce').fillna(0)
 
         signals_df['序号'] = range(1, len(signals_df) + 1)
-        signals_df = signals_df.sort_values('买点日期', ascending=False)
+        signals_df = signals_df.sort_values('触发日期', ascending=False)
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -414,7 +550,7 @@ with tab2:
         st.markdown("### 全部买点信号")
         st.dataframe(signals_df, use_container_width=True)
 
-        col1, col2 = st.columns([1, 1])
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
             download_df = signals_df.copy()
             download_df['股票代码'] = '=' + download_df['股票代码']
@@ -425,5 +561,28 @@ with tab2:
                 "📥 下载扫描结果",
                 csv_data,
                 f"chanlun_scan_{datetime.now().strftime('%Y%m%d')}.csv",
-                "text/csv"
+                "text/csv",
+                key="download_scan_results"
             )
+
+        with col2:
+            if st.button("📤 同步到飞书", type="primary", use_container_width=True):
+                status_container = st.empty()
+                progress_bar = st.progress(0)
+                progress_text = st.empty()
+
+                def update_progress(success, fail, total):
+                    progress = success / total if total > 0 else 0
+                    progress_bar.progress(progress)
+                    progress_text.text(f"已同步 {success}/{total} 条记录...")
+
+                clear_feishu_records()
+                success, fail = sync_to_feishu(signals_df, progress_callback=update_progress)
+
+                progress_bar.progress(1.0)
+                progress_text.text("同步完成！")
+
+                if success > 0:
+                    st.success(f"✅ 成功同步 {success} 条信号到飞书！")
+                    st.info(f"📎 飞书表格链接: https://rcny3i4ugs14.feishu.cn/base/AfodbhAdwaT3aGsT1clcITZRnfr")
+                    st.info("⚠️ 注意：同步会清空表格中原有的所有数据")
