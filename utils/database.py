@@ -124,6 +124,81 @@ class StockDatabase:
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS limit_up_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                code TEXT NOT NULL,
+                name TEXT,
+                reason TEXT,
+                limit_count INTEGER,
+                limit_time TEXT,
+                sector TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(trade_date, code)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS limit_down_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                code TEXT NOT NULL,
+                name TEXT,
+                reason TEXT,
+                limit_count INTEGER,
+                limit_time TEXT,
+                sector TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(trade_date, code)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sector_flow_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                sector_name TEXT NOT NULL,
+                main_net_inflow REAL,
+                net_inflow_ratio REAL,
+                change_pct REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(trade_date, sector_name)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS training_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                training_id TEXT NOT NULL,
+                code TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                total_profit REAL DEFAULT 0,
+                total_trades INTEGER DEFAULT 0,
+                win_rate REAL DEFAULT 0,
+                max_drawdown REAL DEFAULT 0,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trade_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                training_id TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                code TEXT NOT NULL,
+                trade_type TEXT NOT NULL,
+                price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                position REAL NOT NULL,
+                reason TEXT,
+                ai_comment TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         conn.commit()
         conn.close()
 
@@ -672,3 +747,265 @@ class StockDatabase:
         except Exception as e:
             print(f"清空缠论信号失败: {e}")
             return False
+
+    def save_limit_up_history(self, data: List[Dict], trade_date: str) -> int:
+        """保存涨停历史数据"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            saved_count = 0
+            for item in data:
+                code = item.get('代码', item.get('code', ''))
+                name = item.get('名称', item.get('name', ''))
+                sector = item.get('所属行业', item.get('sector', ''))
+
+                cursor.execute("""
+                    INSERT OR REPLACE INTO limit_up_history
+                    (trade_date, code, name, reason, limit_count, limit_time, sector)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    trade_date,
+                    code,
+                    name,
+                    sector,
+                    item.get('连板数', 0),
+                    item.get('涨停统计', ''),
+                    item.get('首次封板时间', '')
+                ))
+                saved_count += 1
+
+            conn.commit()
+            conn.close()
+            return saved_count
+        except Exception as e:
+            print(f"保存涨停历史失败: {e}")
+            return 0
+
+    def save_limit_down_history(self, data: List[Dict], trade_date: str) -> int:
+        """保存跌停历史数据"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            saved_count = 0
+            for item in data:
+                code = item.get('代码', item.get('code', ''))
+                name = item.get('名称', item.get('name', ''))
+                sector = item.get('所属行业', item.get('sector', ''))
+
+                cursor.execute("""
+                    INSERT OR REPLACE INTO limit_down_history
+                    (trade_date, code, name, reason, limit_count, limit_time, sector)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    trade_date,
+                    code,
+                    name,
+                    sector,
+                    item.get('连板数', 0),
+                    item.get('涨停统计', ''),
+                    item.get('首次封板时间', '')
+                ))
+                saved_count += 1
+
+            conn.commit()
+            conn.close()
+            return saved_count
+        except Exception as e:
+            print(f"保存跌停历史失败: {e}")
+            return 0
+
+    def save_sector_flow_history(self, data: pd.DataFrame, trade_date: str) -> int:
+        """保存板块资金流向历史数据"""
+        try:
+            data = data.copy()
+            
+            if '行业' in data.columns:
+                data.rename(columns={'行业': '板块'}, inplace=True)
+            
+            if '行业-涨跌幅' in data.columns:
+                data.rename(columns={'行业-涨跌幅': '涨跌幅'}, inplace=True)
+            
+            if '净额' in data.columns:
+                data.rename(columns={'净额': '主力净流入'}, inplace=True)
+            
+            cols = data.columns.tolist()
+            if len(cols) >= 7 and all(isinstance(c, (int, float)) or (isinstance(c, str) and c.replace('.', '').replace('-', '').isdigit()) for c in cols[:3]):
+                expected = ['板块', '涨跌幅', '成交额', '主力净流入', '超大单净流入', '大单净流入', '中单净流入', '小单净流入']
+                data.columns = expected[:len(cols)]
+
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            saved_count = 0
+            for _, row in data.iterrows():
+                sector_name = row.get('板块', row.get('名称', ''))
+                main_inflow = row.get('主力净流入', 0)
+                net_ratio = row.get('净流入占比', 0)
+                change_pct = row.get('涨跌幅', 0)
+
+                cursor.execute("""
+                    INSERT OR REPLACE INTO sector_flow_history
+                    (trade_date, sector_name, main_net_inflow, net_inflow_ratio, change_pct)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    trade_date,
+                    sector_name,
+                    main_inflow,
+                    net_ratio,
+                    change_pct
+                ))
+                saved_count += 1
+
+            conn.commit()
+            conn.close()
+            return saved_count
+        except Exception as e:
+            print(f"保存板块资金流向历史失败: {e}")
+            return 0
+
+    def get_limit_up_history(self, days: int = 1) -> pd.DataFrame:
+        """获取涨停历史数据"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM limit_up_history
+            WHERE trade_date >= date('now', '-' || ? || ' days')
+            ORDER BY trade_date DESC, code
+        """
+        df = pd.read_sql(query, conn, params=(days,))
+        conn.close()
+        return df
+
+    def get_limit_down_history(self, days: int = 1) -> pd.DataFrame:
+        """获取跌停历史数据"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM limit_down_history
+            WHERE trade_date >= date('now', '-' || ? || ' days')
+            ORDER BY trade_date DESC, code
+        """
+        df = pd.read_sql(query, conn, params=(days,))
+        conn.close()
+        return df
+
+    def get_sector_flow_history(self, days: int = 1) -> pd.DataFrame:
+        """获取板块资金流向历史数据"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM sector_flow_history
+            WHERE trade_date >= date('now', '-' || ? || ' days')
+            ORDER BY trade_date DESC, main_net_inflow DESC
+        """
+        df = pd.read_sql(query, conn, params=(days,))
+        conn.close()
+        return df
+
+    def get_limit_up_history_by_date(self, trade_date: str) -> pd.DataFrame:
+        """获取指定日期的涨停历史数据"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM limit_up_history
+            WHERE trade_date = ?
+            ORDER BY code
+        """
+        df = pd.read_sql(query, conn, params=(trade_date,))
+        conn.close()
+        return df
+
+    def get_limit_down_history_by_date(self, trade_date: str) -> pd.DataFrame:
+        """获取指定日期的跌停历史数据"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM limit_down_history
+            WHERE trade_date = ?
+            ORDER BY code
+        """
+        df = pd.read_sql(query, conn, params=(trade_date,))
+        conn.close()
+        return df
+
+    def get_sector_flow_history_by_date(self, trade_date: str) -> pd.DataFrame:
+        """获取指定日期的板块资金流向历史数据"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM sector_flow_history
+            WHERE trade_date = ?
+            ORDER BY main_net_inflow DESC
+        """
+        df = pd.read_sql(query, conn, params=(trade_date,))
+        conn.close()
+        return df
+
+    def save_training_record(self, training_id: str, code: str, start_date: str, end_date: str,
+                           total_profit: float = 0, total_trades: int = 0, win_rate: float = 0,
+                           max_drawdown: float = 0, notes: str = "") -> bool:
+        """保存训练记录"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO training_records
+                (training_id, code, start_date, end_date, total_profit, total_trades, win_rate, max_drawdown, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (training_id, code, start_date, end_date, total_profit, total_trades, win_rate, max_drawdown, notes))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"保存训练记录失败: {e}")
+            return False
+
+    def save_trade_record(self, training_id: str, trade_date: str, code: str, trade_type: str,
+                         price: float, quantity: float, position: float, reason: str = "",
+                         ai_comment: str = "") -> bool:
+        """保存交易记录"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO trade_records
+                (training_id, trade_date, code, trade_type, price, quantity, position, reason, ai_comment)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (training_id, trade_date, code, trade_type, price, quantity, position, reason, ai_comment))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"保存交易记录失败: {e}")
+            return False
+
+    def get_training_records(self, limit: int = 100) -> pd.DataFrame:
+        """获取训练记录"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM training_records
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        df = pd.read_sql(query, conn, params=(limit,))
+        conn.close()
+        return df
+
+    def get_trade_records(self, training_id: str) -> pd.DataFrame:
+        """获取指定训练ID的交易记录"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM trade_records
+            WHERE training_id = ?
+            ORDER BY trade_date
+        """
+        df = pd.read_sql(query, conn, params=(training_id,))
+        conn.close()
+        return df
+
+    def get_training_record_by_id(self, training_id: str) -> pd.DataFrame:
+        """根据训练ID获取训练记录"""
+        conn = self._get_connection()
+        query = """
+            SELECT * FROM training_records
+            WHERE training_id = ?
+        """
+        df = pd.read_sql(query, conn, params=(training_id,))
+        conn.close()
+        return df

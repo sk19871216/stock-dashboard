@@ -17,12 +17,7 @@ st.header("📊 数据更新")
 db = StockDatabase()
 fetcher = StockDataFetcher()
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 全市场批量更新",
-    "💹 涨跌停",
-    "📊 板块资金",
-    "🐉 龙虎榜"
-])
+tab1 = st.tabs(["📊 全市场批量更新"])[0]
 
 with tab1:
     st.subheader("全市场股票批量更新")
@@ -128,7 +123,7 @@ with tab1:
 
         update_mode = st.radio(
             "选择更新模式",
-            ["📅 快速更新（最近几天）", "📜 全量更新（全部历史数据）"],
+            ["📅 快速更新（最近几天）", "📅 区间更新（指定日期范围）", "📜 全部更新（所有历史数据）"],
             horizontal=True
         )
 
@@ -193,16 +188,16 @@ with tab1:
                     st.success("🎉 所有股票更新成功！")
 
                 st.rerun()
-        else:
-            if st.button("🚀 全量更新（全部历史数据）", type="primary"):
+        elif update_mode == "📅 区间更新（指定日期范围）":
+            if st.button("🚀 区间更新（指定日期范围）", type="primary"):
                 db.clear_failed_stocks()
                 stock_list = db.get_stock_list()
                 total_stocks = len(stock_list)
 
-                st.info(f"开始全量更新 {total_stocks} 只股票（获取全部历史数据），请耐心等待...")
+                st.info(f"开始区间更新 {total_stocks} 只股票（日期范围: {full_start_date} 至 {full_end_date}），请耐心等待...")
 
                 progress_bar = st.progress(0)
-                stats_col1, stats_col2, stats_col3 = st.columns(3)
+                stats_col1, stats_col2 = st.columns(2)
 
                 success_cnt = 0
                 fail_cnt = 0
@@ -237,8 +232,72 @@ with tab1:
                         progress = completed / total_stocks
                         progress_bar.progress(progress)
 
+                        with stats_col1:
+                            st.metric("成功", success_cnt)
+                        with stats_col2:
+                            st.metric("失败", fail_cnt)
+
                 elapsed = time.time() - start_time
-                st.success(f"✅ 全量更新完成！成功: {success_cnt}, 失败: {fail_cnt}，耗时: {elapsed:.1f}秒")
+                st.success(f"✅ 区间更新完成！成功: {success_cnt}, 失败: {fail_cnt}，耗时: {elapsed:.1f}秒")
+
+                remaining_failed = db.get_failed_stocks_count()
+                if remaining_failed > 0:
+                    st.warning(f"⚠️ 还有 {remaining_failed} 只股票更新失败，可以再次点击重试")
+                else:
+                    st.success("🎉 所有股票更新成功！")
+
+                st.rerun()
+        else:
+            if st.button("🚀 全部更新（所有历史数据）", type="primary"):
+                db.clear_failed_stocks()
+                stock_list = db.get_stock_list()
+                total_stocks = len(stock_list)
+
+                st.info(f"开始全部更新 {total_stocks} 只股票（获取所有历史数据），请耐心等待...")
+
+                progress_bar = st.progress(0)
+                stats_col1, stats_col2 = st.columns(2)
+
+                success_cnt = 0
+                fail_cnt = 0
+                start_time = time.time()
+
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {}
+                    for _, row in stock_list.iterrows():
+                        code = row['code']
+                        future = executor.submit(fetcher.get_daily_kline, code)
+                        futures[future] = (code, row.get('name', ''))
+
+                    completed = 0
+                    for future in as_completed(futures):
+                        code, name = futures[future]
+                        try:
+                            df = future.result()
+                            if df is not None and not df.empty:
+                                db.save_kline_data(code, df)
+                                db.remove_failed_stock(code)
+                                success_cnt += 1
+                            else:
+                                db.save_failed_stock(code, name, "无数据")
+                                fail_cnt += 1
+                        except Exception as e:
+                            db.save_failed_stock(code, name, str(e)[:100])
+                            fail_cnt += 1
+
+                        time.sleep(0.05)
+
+                        completed += 1
+                        progress = completed / total_stocks
+                        progress_bar.progress(progress)
+
+                        with stats_col1:
+                            st.metric("成功", success_cnt)
+                        with stats_col2:
+                            st.metric("失败", fail_cnt)
+
+                elapsed = time.time() - start_time
+                st.success(f"✅ 全部更新完成！成功: {success_cnt}, 失败: {fail_cnt}，耗时: {elapsed:.1f}秒")
 
                 remaining_failed = db.get_failed_stocks_count()
                 if remaining_failed > 0:
@@ -252,215 +311,6 @@ with tab1:
     st.markdown("### 📋 数据库状态")
     daily_count = len(db.get_all_stock_codes())
     st.info(f"已下载K线数据的股票: {daily_count} 只")
-
-with tab2:
-    st.subheader("涨跌停数据")
-
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col1:
-        limit_start_date = st.date_input("开始日期", value=date.today(), key="limit_start")
-    with col2:
-        limit_end_date = st.date_input("结束日期", value=date.today(), key="limit_end")
-    with col3:
-        st.markdown("")
-
-    st.info(f"查询日期范围: {limit_start_date} 至 {limit_end_date}")
-
-    if st.button("🔍 查询涨跌停", type="primary"):
-        with st.spinner("正在获取数据..."):
-            limit_up_list = []
-            limit_down_list = []
-
-            current_date = limit_start_date
-            while current_date <= limit_end_date:
-                date_str = current_date.strftime('%Y%m%d')
-
-                try:
-                    up_df = fetcher.get_limit_up_data(date_str)
-                    if up_df is not None and not up_df.empty:
-                        up_df['查询日期'] = current_date.strftime('%Y-%m-%d')
-                        limit_up_list.append(up_df)
-                except:
-                    pass
-
-                try:
-                    down_df = fetcher.get_limit_down_data(date_str)
-                    if down_df is not None and not down_df.empty:
-                        down_df['查询日期'] = current_date.strftime('%Y-%m-%d')
-                        limit_down_list.append(down_df)
-                except:
-                    pass
-
-                current_date = date.fromordinal(current_date.toordinal() + 1)
-
-            def format_amount(df, cols=['成交额', '流通市值', '总市值']):
-                for col in cols:
-                    if col in df.columns:
-                        df[col] = df[col].apply(
-                            lambda x: f"{x/100000000:.2f}亿" if pd.notna(x) and x >= 100000000
-                            else (f"{x/10000:.2f}万" if pd.notna(x) and x >= 10000 else f"{x:.2f}")
-                        )
-                return df
-
-            if limit_up_list:
-                limit_up_df = pd.concat(limit_up_list, ignore_index=True)
-                limit_up_df = format_amount(limit_up_df)
-                st.success(f"📈 找到 {len(limit_up_df)} 条涨停记录")
-
-                st.markdown("### 涨停股票（按涨停板数降序）")
-
-                up_display_cols = ['代码', '名称', '涨跌幅', '最新价', '成交额', '流通市值',
-                                   '换手率', '炸板次数', '涨停统计', '连板数', '首次封板时间', '所属行业']
-                up_display_cols = [c for c in up_display_cols if c in limit_up_df.columns]
-
-                limit_up_df = limit_up_df[up_display_cols]
-                limit_up_df = limit_up_df.sort_values('涨停统计', ascending=False)
-                st.dataframe(limit_up_df, use_container_width=True)
-
-                csv_up = limit_up_df.to_csv(index=False)
-                st.download_button(
-                    "📥 下载涨停数据",
-                    csv_up,
-                    f"limit_up_{limit_start_date.strftime('%Y%m%d')}_{limit_end_date.strftime('%Y%m%d')}.csv",
-                    "text/csv"
-                )
-            else:
-                st.warning("未获取到涨停数据，可能是非交易日")
-
-            st.markdown("---")
-
-            if limit_down_list:
-                limit_down_df = pd.concat(limit_down_list, ignore_index=True)
-                limit_down_df = format_amount(limit_down_df)
-                st.success(f"📉 找到 {len(limit_down_df)} 条跌停记录")
-
-                st.markdown("### 跌停股票（按涨停板数降序）")
-
-                down_display_cols = ['代码', '名称', '涨跌幅', '最新价', '成交额', '流通市值',
-                                     '换手率', '涨停统计', '振幅', '首次封板时间', '炸板次数', '所属行业']
-                down_display_cols = [c for c in down_display_cols if c in limit_down_df.columns]
-
-                limit_down_df = limit_down_df[down_display_cols]
-                limit_down_df = limit_down_df.sort_values('涨停统计', ascending=False)
-                st.dataframe(limit_down_df, use_container_width=True)
-
-                csv_down = limit_down_df.to_csv(index=False)
-                st.download_button(
-                    "📥 下载跌停数据",
-                    csv_down,
-                    f"limit_down_{limit_start_date.strftime('%Y%m%d')}_{limit_end_date.strftime('%Y%m%d')}.csv",
-                    "text/csv"
-                )
-            else:
-                st.info("未获取到跌停数据")
-
-with tab3:
-    st.subheader("板块资金流向")
-
-    sector_col1, sector_col2 = st.columns([1, 1])
-    with sector_col1:
-        sector_indicator = st.selectbox(
-            "选择时间范围",
-            ["今日", "3日排行", "5日排行", "10日排行", "20日排行"],
-            index=0
-        )
-    with sector_col2:
-        st.markdown("")
-        st.info(f"当前选择: {sector_indicator}")
-
-    if st.button("🔄 刷新板块数据", type="primary"):
-        with st.spinner("正在获取板块数据..."):
-            sector_df = fetcher.get_sector_flow(indicator=sector_indicator)
-
-            if sector_df is not None and not sector_df.empty:
-                st.success(f"获取到 {len(sector_df)} 个板块数据")
-
-                def format_amount(df, cols=['成交额', '总成交额', '主力净流入', '超大单净流入', '大单净流入', '中单净流入', '小单净流入']):
-                    for col in cols:
-                        if col in df.columns:
-                            df[col] = df[col].apply(
-                                lambda x: f"{x/100000000:.2f}亿" if pd.notna(x) and abs(x) >= 100000000
-                                else (f"{x/10000:.2f}万" if pd.notna(x) and abs(x) >= 10000 else f"{x:.2f}")
-                            )
-                    return df
-
-                sector_df = format_amount(sector_df)
-
-                display_cols = [c for c in sector_df.columns if c in
-                              ['板块', '涨跌幅', '成交额', '总成交额', '主力净流入', '超大单净流入',
-                               '大单净流入', '中单净流入', '小单净流入', '公司家数']]
-                display_cols = [c for c in display_cols if c in sector_df.columns]
-
-                sector_df = sector_df[display_cols]
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("### 📈 涨幅板块")
-                    top_sectors = sector_df[sector_df['涨跌幅'].apply(
-                        lambda x: float(str(x).replace('%', '')) > 0 if str(x).replace('%', '').replace('-', '').replace('.', '').isdigit() else False
-                    )].head(15)
-                    if not top_sectors.empty:
-                        st.dataframe(top_sectors, use_container_width=True)
-                    else:
-                        try:
-                            sector_df['涨跌幅_num'] = sector_df['涨跌幅'].apply(
-                                lambda x: float(str(x).replace('%', '')) if isinstance(x, str) else x
-                            )
-                            top_sectors = sector_df[sector_df['涨跌幅_num'] > 0].head(15)
-                            st.dataframe(top_sectors.drop(columns=['涨跌幅_num']), use_container_width=True)
-                        except:
-                            st.dataframe(sector_df.head(15), use_container_width=True)
-
-                with col2:
-                    st.markdown("### 📉 跌幅板块")
-                    bottom_sectors = sector_df[sector_df['涨跌幅'].apply(
-                        lambda x: float(str(x).replace('%', '').replace('-', '')) if str(x).replace('%', '').replace('-', '').replace('.', '').isdigit() else False
-                    )]
-                    try:
-                        sector_df['涨跌幅_num'] = sector_df['涨跌幅'].apply(
-                            lambda x: float(str(x).replace('%', '')) if isinstance(x, str) else x
-                        )
-                        bottom_sectors = sector_df[sector_df['涨跌幅_num'] < 0].tail(15)
-                        st.dataframe(bottom_sectors.drop(columns=['涨跌幅_num']), use_container_width=True)
-                    except:
-                        st.dataframe(sector_df.tail(15), use_container_width=True)
-
-                st.markdown("### 📋 全部板块")
-                st.dataframe(sector_df, use_container_width=True)
-
-                csv = sector_df.to_csv(index=False)
-                st.download_button(
-                    "📥 下载板块资金流向",
-                    csv,
-                    f"sector_flow_{sector_indicator}_{date.today()}.csv",
-                    "text/csv"
-                )
-            else:
-                st.error("获取板块数据失败，可能是网络问题或非交易日")
-
-with tab4:
-    st.subheader("龙虎榜数据")
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        lhb_date = st.date_input("选择日期", value=date.today(), key="lhb_date")
-
-    if st.button("🔍 查询龙虎榜", type="primary"):
-        with st.spinner("正在获取龙虎榜数据..."):
-            dragon_tiger_df = fetcher.get_dragon_tiger_data(lhb_date.strftime('%Y%m%d'))
-            if dragon_tiger_df is not None and not dragon_tiger_df.empty:
-                st.success(f"获取到 {len(dragon_tiger_df)} 条龙虎榜数据")
-                st.dataframe(dragon_tiger_df, use_container_width=True)
-
-                csv = dragon_tiger_df.to_csv(index=False)
-                st.download_button(
-                    "📥 下载龙虎榜数据",
-                    csv,
-                    f"dragon_tiger_{lhb_date.strftime('%Y%m%d')}.csv",
-                    "text/csv"
-                )
-            else:
-                st.info("未获取到龙虎榜数据，可能是非交易日或数据源问题")
 
 st.markdown("---")
 st.markdown("### 📋 数据更新日志")
