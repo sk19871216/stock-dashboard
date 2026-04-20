@@ -168,6 +168,41 @@ class StockDatabase:
         """)
 
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS hot_stocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                rank_change INTEGER DEFAULT 0,
+                code TEXT NOT NULL,
+                name TEXT,
+                change_pct REAL DEFAULT 0,
+                attention_ratio TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(trade_date, code)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS industry_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                board_name TEXT NOT NULL,
+                change_pct REAL DEFAULT 0,
+                volume TEXT DEFAULT '',
+                amount TEXT DEFAULT '',
+                net_flow TEXT DEFAULT '',
+                up_count INTEGER DEFAULT 0,
+                down_count INTEGER DEFAULT 0,
+                avg_price TEXT DEFAULT '',
+                top_stock TEXT DEFAULT '',
+                top_price TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(trade_date, board_name)
+            )
+        """)
+
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS training_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 training_id TEXT NOT NULL,
@@ -928,12 +963,22 @@ class StockDatabase:
     def get_sector_flow_history_by_date(self, trade_date: str) -> pd.DataFrame:
         """获取指定日期的板块资金流向历史数据"""
         conn = self._get_connection()
-        query = """
+        
+        date_formats = [trade_date]
+        if len(trade_date) == 8:
+            date_formats.append(f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}")
+        elif '-' not in trade_date:
+            if len(trade_date) == 10:
+                date_formats.append(trade_date[:4] + '-' + trade_date[4:6] + '-' + trade_date[6:])
+        
+        placeholders = ','.join(['?' for _ in date_formats])
+        query = f"""
             SELECT * FROM sector_flow_history
-            WHERE trade_date = ?
-            ORDER BY main_net_inflow DESC
+            WHERE trade_date IN ({placeholders})
+            ORDER BY change_pct DESC
         """
-        df = pd.read_sql(query, conn, params=(trade_date,))
+        
+        df = pd.read_sql(query, conn, params=tuple(date_formats))
         conn.close()
         return df
 
@@ -998,6 +1043,196 @@ class StockDatabase:
         df = pd.read_sql(query, conn, params=(training_id,))
         conn.close()
         return df
+
+    def save_hot_stocks(self, data: List[Dict], trade_date: str = None) -> int:
+        """保存热门个股数据"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            saved_count = 0
+            for item in data:
+                code = str(item.get('code', '')).zfill(6)
+                if len(code) != 6:
+                    continue
+
+                if trade_date is None:
+                    trade_date = item.get('trade_date', datetime.now().strftime("%Y-%m-%d"))
+
+                cursor.execute("""
+                    INSERT OR REPLACE INTO hot_stocks
+                    (trade_date, rank, rank_change, code, name, change_pct, attention_ratio)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    trade_date,
+                    item.get('rank', 0),
+                    item.get('rank_change', 0),
+                    code,
+                    item.get('name', ''),
+                    item.get('change_pct', 0),
+                    item.get('attention_ratio', '')
+                ))
+                saved_count += 1
+
+            conn.commit()
+            conn.close()
+            return saved_count
+        except Exception as e:
+            print(f"保存热门个股数据失败: {e}")
+            return 0
+
+    def save_industry_data(self, data: List[Dict]) -> int:
+        """保存行业数据"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            saved_count = 0
+            for item in data:
+                board_name = item.get('board_name', '')
+                if not board_name:
+                    continue
+
+                trade_date = item.get('trade_date', datetime.now().strftime("%Y-%m-%d"))
+
+                cursor.execute("""
+                    INSERT OR REPLACE INTO industry_data
+                    (trade_date, seq, board_name, change_pct, volume, amount, net_flow,
+                     up_count, down_count, avg_price, top_stock, top_price)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    trade_date,
+                    item.get('seq', 0),
+                    board_name,
+                    item.get('change_pct', 0),
+                    item.get('volume', ''),
+                    item.get('amount', ''),
+                    item.get('net_flow', ''),
+                    item.get('up_count', 0),
+                    item.get('down_count', 0),
+                    item.get('avg_price', ''),
+                    item.get('top_stock', ''),
+                    item.get('top_price', '')
+                ))
+                saved_count += 1
+
+            conn.commit()
+            conn.close()
+            return saved_count
+        except Exception as e:
+            print(f"保存行业数据失败: {e}")
+            return 0
+
+    def get_industry_data(self, trade_date: str = None) -> pd.DataFrame:
+        """获取行业数据"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if trade_date:
+            query = """
+                SELECT * FROM industry_data
+                WHERE trade_date = ?
+                ORDER BY seq
+            """
+            df = pd.read_sql(query, conn, params=(trade_date,))
+        else:
+            query = """
+                SELECT * FROM industry_data
+                WHERE trade_date = (SELECT MAX(trade_date) FROM industry_data)
+                ORDER BY seq
+            """
+            df = pd.read_sql(query, conn)
+
+        conn.close()
+        return df
+
+    def get_industry_data_dates(self) -> List[str]:
+        """获取所有有行业数据的日期"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT trade_date FROM industry_data
+            ORDER BY trade_date DESC
+        """)
+        dates = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return dates
+
+    def get_hot_stocks(self, trade_date: str = None, limit: int = 100) -> pd.DataFrame:
+        """获取热门个股数据"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if trade_date:
+            query = """
+                SELECT * FROM hot_stocks
+                WHERE trade_date = ?
+                ORDER BY rank
+                LIMIT ?
+            """
+            df = pd.read_sql(query, conn, params=(trade_date, limit))
+        else:
+            query = """
+                SELECT * FROM hot_stocks
+                WHERE trade_date = (SELECT MAX(trade_date) FROM hot_stocks)
+                ORDER BY rank
+                LIMIT ?
+            """
+            df = pd.read_sql(query, conn, params=(limit,))
+
+        conn.close()
+        return df
+
+    def get_hot_stocks_by_date(self, trade_date: str) -> pd.DataFrame:
+        """获取指定日期的热门个股数据"""
+        return self.get_hot_stocks(trade_date)
+
+    def get_hot_stocks_dates(self) -> List[str]:
+        """获取所有有热门个股数据的日期"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT trade_date FROM hot_stocks
+            ORDER BY trade_date DESC
+        """)
+        dates = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return dates
+
+    def get_hot_stocks_count(self, trade_date: str = None) -> int:
+        """获取热门个股数量"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if trade_date:
+            cursor.execute("SELECT COUNT(*) FROM hot_stocks WHERE trade_date = ?", (trade_date,))
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) FROM hot_stocks
+                WHERE trade_date = (SELECT MAX(trade_date) FROM hot_stocks)
+            """)
+
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    def clear_hot_stocks(self, trade_date: str = None) -> bool:
+        """清空热门个股数据"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if trade_date:
+                cursor.execute("DELETE FROM hot_stocks WHERE trade_date = ?", (trade_date,))
+            else:
+                cursor.execute("DELETE FROM hot_stocks")
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"清空热门个股数据失败: {e}")
+            return False
 
     def get_training_record_by_id(self, training_id: str) -> pd.DataFrame:
         """根据训练ID获取训练记录"""

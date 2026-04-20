@@ -275,21 +275,68 @@ class StockDataFetcher:
     def get_sector_flow(self, indicator: str = "今日") -> Optional[pd.DataFrame]:
         try:
             import akshare as ak
-            df = ak.stock_sector_fund_flow_rank(indicator=indicator, sector_type='行业资金流')
+            df = ak.stock_fund_flow_industry()
             if df is not None and not df.empty:
+                df = self._normalize_sector_columns(df)
+                print(f"✅ 获取到同花顺-行业资金流向数据: {len(df)} 条")
                 return df
         except Exception as e:
-            print(f"获取行业资金流向失败: {e}")
+            print(f"获取同花顺-行业资金流向失败: {e}")
 
         try:
             import akshare as ak
-            df = ak.stock_sector_spot()
+            df = ak.stock_fund_flow_concept()
             if df is not None and not df.empty:
+                df = self._normalize_sector_columns(df)
+                print(f"✅ 获取到同花顺-概念资金流向数据: {len(df)} 条")
                 return df
         except Exception as e:
-            print(f"获取板块资金流向失败 (备选): {e}")
+            print(f"获取同花顺-概念资金流向失败: {e}")
+
+        try:
+            df = ak.stock_sector_spot()
+            if df is not None and not df.empty:
+                df = self._normalize_sector_columns(df)
+                print(f"⚠️ 仅获取到板块行情数据（无资金流向）: {len(df)} 条")
+                return df
+        except Exception as e:
+            print(f"获取板块行情失败: {e}")
 
         return None
+
+    def _normalize_sector_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """标准化板块数据列名"""
+        if df.empty:
+            return df
+
+        df = df.copy()
+        
+        if '行业' in df.columns:
+            df.rename(columns={'行业': '板块'}, inplace=True)
+        
+        if '行业-涨跌幅' in df.columns:
+            df.rename(columns={'行业-涨跌幅': '涨跌幅'}, inplace=True)
+        
+        if '净额' in df.columns:
+            df.rename(columns={'净额': '主力净流入'}, inplace=True)
+        
+        if '流入资金' in df.columns and '流出资金' in df.columns:
+            df['成交额'] = df['流入资金'] + df['流出资金']
+        
+        original_cols = df.columns.tolist()
+
+        if len(original_cols) >= 7 and all(isinstance(c, (int, float)) or str(c).replace('.', '').replace('-', '').isdigit() for c in original_cols[:3]):
+            col_names = ['板块', '涨跌幅', '成交额', '主力净流入', '超大单净流入', '大单净流入', '中单净流入', '小单净流入']
+            df.columns = col_names[:len(df.columns)]
+
+        expected_cols = ['板块', '涨跌幅', '成交额', '主力净流入']
+        current_cols = df.columns.tolist()
+        has_expected = any(c in current_cols for c in expected_cols)
+
+        if not has_expected and len(current_cols) >= 7:
+            df.columns = expected_cols[:len(current_cols)]
+
+        return df
 
     def get_sector_flow_hist(self, symbol: str) -> Optional[pd.DataFrame]:
         try:

@@ -14,6 +14,15 @@ from utils.database import StockDatabase
 from utils.technical_analysis import add_technical_indicators, calculate_profit
 from ai.analyzer import AIAnalyzer
 
+st.markdown("""
+<style>
+/* 修改rangeslider高度为40px */
+.rangeslider-slidebox {
+    height: 40px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 def init_session_state():
     """初始化会话状态"""
     if 'training_id' not in st.session_state:
@@ -65,17 +74,17 @@ def get_weekly_index(weekly_df, target_date):
     return 0
 
 def create_kline_chart(df, current_index=None, trade_points=None, training_start_index=None):
-    """创建K线图 - 使用subplot实现5:1布局（K线5份，量柱1份）"""
+    """创建K线图 - 使用subplot实现3行布局（价格、成交量、量能）"""
     # 确保日期列是datetime格式（解决日期间隔问题）
     df_plot = df.copy()
     df_plot['date'] = pd.to_datetime(df_plot['date'])
     
-    # 创建subplot结构：2行，价格占400份，成交量占150份
-    # 总共550份，比例约为 400:150 = 8:3
+    # 创建subplot结构：3行，价格400份，成交量225份，量能40份
+    # 总共665份
     fig = make_subplots(
-        rows=2,
+        rows=3,
         cols=1,
-        row_heights=[400, 150],  # 400:150比例
+        row_heights=[400, 225, 40],  # 价格400份，成交量225份，量能40份
         shared_xaxes=True,
         vertical_spacing=0.02,  # 上下间距
         subplot_titles=('', ''),  # 不显示子标题
@@ -148,17 +157,28 @@ def create_kline_chart(df, current_index=None, trade_points=None, training_start
         width=0.8  # 设置柱子宽度
     ), row=2, col=1)
     
+    # 添加量柱到第3行 - 显示量柱变化（与第2行类似但更小）
+    fig.add_trace(go.Bar(
+        x=df_plot['date'],
+        y=df_plot['volume'],
+        marker_color=colors,
+        width=0.8,  # 设置柱子宽度
+        name='量柱'
+    ), row=3, col=1)
+    
     # 计算量柱y轴范围
     max_volume = df_plot['volume'].max()
     volume_y_max = max_volume * 1.2  # 留出20%的顶部空间
     
-    # 配置y轴标题和域（分离K线和成交量）
+    # 配置y轴标题和域（分离K线、成交量和量柱）
     fig.update_yaxes(title_text='价格', title_font=dict(size=12), row=1, col=1)
     fig.update_yaxes(title_text='成交量', title_font=dict(size=12), row=2, col=1)
+    fig.update_yaxes(title_text='量柱', title_font=dict(size=10), row=3, col=1)
     
-    # 设置Y轴域，分离K线和成交量区域
-    fig.update_yaxes(domain=[0.25, 1], row=1, col=1)  # K线占上方75%
-    fig.update_yaxes(domain=[0, 0.2], row=2, col=1)  # 成交量占下方20%
+    # 设置Y轴域，分离K线、成交量和量柱区域
+    fig.update_yaxes(domain=[0.35, 1], row=1, col=1)  # K线占上方65%
+    fig.update_yaxes(domain=[0.15, 0.32], row=2, col=1)  # 成交量占15%-32%
+    fig.update_yaxes(domain=[0, 0.12], row=3, col=1)  # 量柱占下方12%
     
     # 虚线固定在训练开始位置，不随交易移动
     if training_start_index is not None and training_start_index < len(df_plot):
@@ -198,7 +218,7 @@ def create_kline_chart(df, current_index=None, trade_points=None, training_start
             x=1
         ),
         hovermode='closest',  # 只显示最近的数据点，移除成交量区域的K线hover信息
-        height=580,  # 固定高度（价格400 + 成交量150 + 间距等）
+        height=665,  # 固定高度（价格400 + 成交量225 + 量能40 + 间距等）
         width=2200,  # 增加宽度到2200
         hoverlabel=dict(
             namelength=-1,  # 显示完整信息
@@ -216,12 +236,13 @@ def create_kline_chart(df, current_index=None, trade_points=None, training_start
     # 配置量柱y轴范围
     fig.update_yaxes(range=[0, volume_y_max], row=2, col=1)
     
-    # 配置x轴，设置type为date以正确显示日期间隔
+    # 配置x轴，设置type为date以正确显示日期间隔，禁用rangeslider
     fig.update_xaxes(
         type='date',
         showticklabels=True,
         showgrid=True,
         gridcolor='lightgray',
+        rangeslider=dict(visible=False),  # 禁用rangeslider
         row=1, col=1
     )
     fig.update_xaxes(
@@ -229,7 +250,16 @@ def create_kline_chart(df, current_index=None, trade_points=None, training_start
         showticklabels=True,
         showgrid=True,
         gridcolor='lightgray',
+        rangeslider=dict(visible=False),  # 禁用rangeslider
         row=2, col=1
+    )
+    fig.update_xaxes(
+        type='date',
+        showticklabels=True,
+        showgrid=True,
+        gridcolor='lightgray',
+        rangeslider=dict(visible=False),  # 禁用rangeslider
+        row=3, col=1
     )
     
     return fig

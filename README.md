@@ -6,13 +6,45 @@
 
 ### 页面导航（侧边栏顺序）
 1. **数据更新** - 全市场股票数据批量更新（通达信 + akshare）
-2. **情报追踪** - 自选股管理、触发指标筛选，大盘分析、涨跌停统计
-3. **数据分析** - 涨跌停分析、板块资金流向，龙虎榜数据
+2. **市场情绪分析** - 板块资金流向、涨跌停统计、市场情绪指标
+3. **热门个股** - 东财股吧热门个股排行、历史数据回溯
 4. **缠论分析** - 单股缠论买卖点分析、背驰判断、信号回测
-5. **缠论选股** - 全市场缠论买点扫描
-6. **股票预测** - 技术指标分析和明日股价预测
-7. **复盘分析** - 预测与实际对比、准确率统计
-8. **K线训练** - 交互式K线训练、AI辅助分析、交易复盘
+5. **情报追踪** - 自选股管理、触发指标筛选，大盘分析
+6. **数据分析** - 涨跌停分析、龙虎榜数据
+7. **股票预测** - 技术指标分析和明日股价预测
+8. **复盘分析** - 预测与实际对比、准确率统计
+9. **K线训练** - 交互式K线训练、AI辅助分析、交易复盘
+
+### 市场情绪分析页面功能
+
+#### 板块资金流向
+- **数据来源**: 同花顺行业板块数据
+- **数据获取**: 支持获取第1页和第2页全部板块数据（约90个板块）
+- **日期选择**: 可选择任意日期存入/查看历史数据
+- **柱状图展示**: 主力净流入TOP15横向柱状图（绿色=净流入，红色=净流出）
+- **数据表格**: 展示所有板块的涨跌幅和主力净流入数据
+
+#### 涨跌停统计
+- **涨停列表**: 显示涨停股票、连板数、所属板块
+- **跌停列表**: 显示跌停股票及所属板块
+- **板块分布**: 饼图展示涨跌停股票的板块分布
+
+### 热门个股页面功能
+
+#### 数据来源
+- **东财股吧**: 从东方财富股吧排行榜获取热门个股数据
+- **Selenium抓取**: 使用Selenium动态抓取页面数据
+
+#### 数据展示
+- **排名**: 热门排名序号
+- **代码**: 股票代码
+- **名称**: 股票名称
+- **涨跌幅**: 当日涨跌幅
+- **排名变动**: 相比上一期的排名变化
+
+#### 日期筛选
+- 支持按日期查看历史数据
+- 数据存入SQLite数据库，可追溯历史
 
 ### K线训练页面功能
 
@@ -43,8 +75,8 @@
 ## 技术栈
 
 - **前端**: Streamlit (原生多页面架构)
-- **数据获取**: mootdx (通达信, 优先), akshare (备选)
-- **数据存储**: SQLite (daily 表)
+- **数据获取**: mootdx (通达信, 优先), akshare (备选), Selenium (网页抓取)
+- **数据存储**: SQLite (daily 表、板块资金流向表、热门个股表等)
 - **技术分析**: pandas, numpy, plotly
 
 ## 数据库结构
@@ -70,6 +102,34 @@ CREATE TABLE daily (
 );
 ```
 
+### sector_flow_history 表（板块资金流向）
+```sql
+CREATE TABLE sector_flow_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT NOT NULL,      -- 交易日期
+    sector_name TEXT NOT NULL,     -- 板块名称
+    main_net_inflow REAL,          -- 主力净流入（亿元）
+    change_pct REAL,               -- 涨跌幅(%)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(trade_date, sector_name)
+);
+```
+
+### hot_stocks 表（热门个股）
+```sql
+CREATE TABLE hot_stocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT NOT NULL,      -- 日期
+    rank INTEGER,                  -- 排名
+    code TEXT NOT NULL,            -- 股票代码
+    name TEXT,                     -- 股票名称
+    change_pct REAL,               -- 涨跌幅
+    rank_change INTEGER,           -- 排名变动
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(trade_date, code)
+);
+```
+
 ### 其他表
 - `stock_list` - 全市场股票列表
 - `watchlist` - 自选股
@@ -77,6 +137,9 @@ CREATE TABLE daily (
 - `update_failed_stocks` - 更新失败的股票（用于重试）
 - `predictions` - 预测记录
 - `review_log` - 复盘记录
+- `limit_up_history` - 涨停历史
+- `limit_down_history` - 跌停历史
+- `industry_data` - 行业板块数据
 
 ## 安装
 
@@ -88,8 +151,10 @@ pip install -r requirements.txt
 - streamlit >= 1.28.0
 - mootdx >= 0.8.0 (通达信数据源)
 - akshare >= 1.12.0 (备用数据源)
+- selenium >= 4.0.0 (网页抓取)
 - pandas >= 2.0.0
 - plotly >= 5.18.0
+- beautifulsoup4 >= 4.12.0
 
 ## 运行
 
@@ -111,6 +176,16 @@ streamlit run app.py
 - 备选数据源
 - 速度较慢
 - 用于通达信失败时的补充
+
+### 同花顺板块数据
+- 从 https://q.10jqka.com.cn/thshy/ 抓取
+- 支持分页获取全部板块数据
+- 数据包括：板块名称、涨跌幅、主力净流入等
+
+### 东财热门个股
+- 从 https://guba.eastmoney.com/rank/ 抓取
+- 使用Selenium动态加载页面
+- 支持排名变动分析
 
 ### 停牌股票处理
 - 通达信会返回停牌假数据（成交量=0）
@@ -134,17 +209,23 @@ streamlit run app.py
 ├── config.py                 # 配置文件
 ├── requirements.txt           # 依赖清单
 ├── README.md                 # 本文档
+├── .streamlit/              # Streamlit 配置
+│   └── config.toml          # Streamlit 设置
 ├── pages/                    # Streamlit 多页面
 │   ├── 1_数据更新.py        # 数据更新
-│   ├── 2_情报追踪.py        # 情报追踪
-│   ├── 3_数据分析.py        # 数据分析
+│   ├── 2_市场情绪分析.py    # 市场情绪分析（板块资金、涨跌停）
+│   ├── 3_热门个股.py        # 热门个股排行
 │   ├── 4_缠论分析.py        # 缠论分析
-│   ├── 5_缠论选股.py        # 缠论选股
-│   ├── 6_股票预测.py         # 股票预测
-│   └── 7_复盘分析.py         # 复盘分析
+│   ├── 5_情报追踪.py        # 情报追踪
+│   ├── 6_数据分析.py        # 数据分析
+│   ├── 7_股票预测.py         # 股票预测
+│   ├── 8_复盘分析.py         # 复盘分析
+│   └── 9_K线训练.py         # K线训练
 ├── utils/                    # 工具模块
 │   ├── database.py           # 数据库管理
 │   ├── data_fetcher.py      # 数据获取
+│   ├── hot_stocks_fetcher.py # 热门个股抓取
+│   ├── technical_analysis.py # 技术指标计算
 │   └── styles.py             # 样式工具
 ├── chanlun/                  # 缠论模块
 │   ├── fenxing_with_macd.py # 分型识别
@@ -170,6 +251,9 @@ A: 检查通达信服务器是否运行，IP和端口是否正确。代码会自
 
 ### Q: 缠论分型判断逻辑
 A: 分型需要前后都有独立K线才会确认，不在头尾补充分型。
+
+### Q: 板块数据获取不完整
+A: 系统会自动获取第1页和第2页数据，确保获取全部约90个板块。
 
 ## 注意事项
 
